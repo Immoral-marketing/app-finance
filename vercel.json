@@ -3,8 +3,20 @@
     "outputDirectory": "client/dist",
     "rewrites": [
         {
-            "source": "/api/(.*)",
-            "destination": "/api/$1"
+            "source": "/api/admin/(.*)",
+            "destination": "/api/admin/index.js"
+        },
+        {
+            "source": "/api/billing/(.*)",
+            "destination": "/api/billing/index.js"
+        },
+        {
+            "source": "/api/payroll/(.*)",
+            "destination": "/api/payroll/index.js"
+        },
+        {
+            "source": "/api/commissions/(.*)",
+            "destination": "/api/commissions/index.js"
         },
         {
             "source": "/(.*)",
