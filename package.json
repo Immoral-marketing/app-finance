@@ -2,6 +2,7 @@
     "name": "immoral-finance-app",
     "version": "1.0.0",
     "private": true,
+    "type": "module",
     "scripts": {
         "install:all": "npm install && cd client && npm install && cd ../services/admin-service && npm install && cd ../billing-service && npm install && cd ../payroll-service && npm install && cd ../commissions-service && npm install",
         "dev": "concurrently \"npm run dev:client\" \"npm run dev:admin\" \"npm run dev:billing\" \"npm run dev:payroll\" \"npm run dev:commissions\"",
