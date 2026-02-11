@@ -86,22 +86,25 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ================================================
 
-app.listen(PORT, () => {
-    console.log(`
-╔══════════════════════════════════════════════════╗
-║  Immoral Commissions Service                     ║
-║  Port: ${PORT}                                      ║
-║  Environment: ${process.env.NODE_ENV || 'development'}                     ║
-║  Supabase: ${process.env.SUPABASE_URL ? '✓ Connected' : '✗ Not configured'}       ║
-╚══════════════════════════════════════════════════╝
 
-💰 Modules:
-  • Partner Commissions (PAID to referrers)
-  • Platform Commissions (EARNED from WillMay, etc.)
-  • Automatic calculation + manual override
-
-🚀 Ready at http://localhost:${PORT}
-  `);
-});
+if (process.env.NODE_ENV !== 'production' && process.argv[1].endsWith('index.js')) {
+    app.listen(PORT, () => {
+        console.log(`
+    ╔══════════════════════════════════════════════════╗
+    ║  Immoral Commissions Service                     ║
+    ║  Port: ${PORT}                                      ║
+    ║  Environment: ${process.env.NODE_ENV || 'development'}                     ║
+    ║  Supabase: ${process.env.SUPABASE_URL ? '✓ Connected' : '✗ Not configured'}       ║
+    ╚══════════════════════════════════════════════════╝
+    
+    💰 Modules:
+      • Partner Commissions (PAID to referrers)
+      • Platform Commissions (EARNED from WillMay, etc.)
+      • Automatic calculation + manual override
+    
+    🚀 Ready at http://localhost:${PORT}
+      `);
+    });
+}
 
 export default app;

@@ -1,9 +1,10 @@
 import { supabase } from '@/lib/supabase';
 
 const SERVICES = {
-    ADMIN: 'http://localhost:3010',
-    PAYROLL: 'http://localhost:3011',
-    COMMISSIONS: 'http://localhost:3012'
+    ADMIN: '/api/admin',
+    PAYROLL: '/api/payroll',
+    COMMISSIONS: '/api/commissions',
+    BILLING: '/api/billing'
 };
 
 interface FetchOptions extends RequestInit {

@@ -47,19 +47,25 @@ app.use((err, req, res, next) => {
 async function startServer() {
     try {
         // Test database connection
-        const dbConnected = await testConnection();
-        if (!dbConnected) {
-            console.error('Failed to connect to database. Exiting...');
-            process.exit(1);
+        // In serverless environment, we might want to skip this or handle it differently
+        // regarding connection pooling
+        if (process.env.NODE_ENV !== 'production') {
+            const dbConnected = await testConnection();
+            if (!dbConnected) {
+                console.error('Failed to connect to database. Exiting...');
+                process.exit(1);
+            }
         }
 
-        app.listen(PORT, () => {
-            console.log(`🚀 Billing Service running on port ${PORT}`);
-            console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-            console.log(`🔗 Endpoints:`);
-            console.log(`   - POST http://localhost:${PORT}/events/invoice-issued`);
-            console.log(`   - GET  http://localhost:${PORT}/events/health`);
-        });
+        if (process.env.NODE_ENV !== 'production' && process.argv[1].endsWith('index.js')) {
+            app.listen(PORT, () => {
+                console.log(`🚀 Billing Service running on port ${PORT}`);
+                console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+                console.log(`🔗 Endpoints:`);
+                console.log(`   - POST http://localhost:${PORT}/events/invoice-issued`);
+                console.log(`   - GET  http://localhost:${PORT}/events/health`);
+            });
+        }
     } catch (error) {
         console.error('Failed to start server:', error);
         process.exit(1);
@@ -67,3 +73,5 @@ async function startServer() {
 }
 
 startServer();
+
+export default app;

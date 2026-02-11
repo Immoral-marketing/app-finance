@@ -34,11 +34,18 @@ app.use('/dashboard', dashboardRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/users', usersRoutes);
 
+
 // Health Check
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', service: 'admin-service' });
 });
 
-app.listen(port, () => {
-    console.log(`Admin Service running on port ${port} - Restarted at ${new Date().toISOString()} [RESTARTED]`);
-});
+// Export app for Vercel Serverless Functions
+export default app;
+
+// Only start the server if running directly
+if (process.env.NODE_ENV !== 'production' && process.argv[1].endsWith('index.js')) {
+    app.listen(port, () => {
+        console.log(`Admin Service running on port ${port} - Restarted at ${new Date().toISOString()} [RESTARTED]`);
+    });
+}

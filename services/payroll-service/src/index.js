@@ -81,22 +81,28 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ================================================
 
-app.listen(PORT, () => {
-    console.log(`
-╔══════════════════════════════════════════════════╗
-║  Immoral Payroll Service                         ║
-║  Port: ${PORT}                                      ║
-║  Environment: ${process.env.NODE_ENV || 'development'}                     ║
-║  Supabase: ${process.env.SUPABASE_URL ? '✓ Connected' : '✗ Not configured'}       ║
-╚══════════════════════════════════════════════════╝
+// ================================================
+// START SERVER
+// ================================================
 
-💼 Modules:
-  • Employee Management (CRUD + salary history)
-  • Payroll Processing (auto department splits)
-  • Manual split override (Excel-like flexibility)
+if (process.env.NODE_ENV !== 'production' && process.argv[1].endsWith('index.js')) {
+    app.listen(PORT, () => {
+        console.log(`
+    ╔══════════════════════════════════════════════════╗
+    ║  Immoral Payroll Service                         ║
+    ║  Port: ${PORT}                                      ║
+    ║  Environment: ${process.env.NODE_ENV || 'development'}                     ║
+    ║  Supabase: ${process.env.SUPABASE_URL ? '✓ Connected' : '✗ Not configured'}       ║
+    ╚══════════════════════════════════════════════════╝
 
-🚀 Ready at http://localhost:${PORT}
-  `);
-});
+    💼 Modules:
+      • Employee Management (CRUD + salary history)
+      • Payroll Processing (auto department splits)
+      • Manual split override (Excel-like flexibility)
+
+    🚀 Ready at http://localhost:${PORT}
+      `);
+    });
+}
 
 export default app;

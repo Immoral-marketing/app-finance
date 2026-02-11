@@ -1,0 +1,22 @@
+{
+    "name": "immoral-finance-app",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "install:all": "npm install && cd client && npm install && cd ../services/admin-service && npm install && cd ../billing-service && npm install && cd ../payroll-service && npm install && cd ../commissions-service && npm install",
+        "dev": "concurrently \"npm run dev:client\" \"npm run dev:admin\" \"npm run dev:billing\" \"npm run dev:payroll\" \"npm run dev:commissions\"",
+        "dev:client": "cd client && npm run dev",
+        "dev:admin": "cd services/admin-service && npm run dev",
+        "dev:billing": "cd services/billing-service && npm run dev",
+        "dev:payroll": "cd services/payroll-service && npm run dev",
+        "dev:commissions": "cd services/commissions-service && npm run dev",
+        "build": "cd client && npm install && npm run build"
+    },
+    "workspaces": [
+        "client",
+        "services/*"
+    ],
+    "devDependencies": {
+        "concurrently": "^8.2.2"
+    }
+}
