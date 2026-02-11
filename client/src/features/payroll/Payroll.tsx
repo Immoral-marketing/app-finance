@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { payrollApi, PayrollRecord } from '@/lib/api/payroll';
+import { payrollApi } from '@/lib/api/payroll';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { PeriodSelector } from '@/components/shared/PeriodSelector';
@@ -207,7 +207,7 @@ export default function Payroll() {
                         <CardHeader className="flex flex-row items-center justify-between sticky top-0 bg-white z-10 border-b">
                             <div>
                                 <CardTitle>{selectedEmployee.full_name}</CardTitle>
-                                <CardDescription>{selectedEmployee.position} • {selectedEmployee.department?.name || 'General'}</CardDescription>
+                                <CardDescription>{selectedEmployee.position} • {(selectedEmployee as any).department?.name || 'General'}</CardDescription>
                             </div>
                             <Button variant="ghost" size="icon" onClick={() => setShowSalaryModal(false)}>
                                 <X size={20} />

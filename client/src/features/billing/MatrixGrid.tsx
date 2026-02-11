@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { adminApi } from '@/lib/api/admin';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { Plus, MoreHorizontal, RefreshCw, Trash2, Copy, Columns, UserPlus } from 'lucide-react';
+import { MoreHorizontal, Trash2, Copy } from 'lucide-react';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -26,7 +25,6 @@ interface MatrixGridProps {
 }
 
 export const MatrixGrid = ({ data, year, month }: MatrixGridProps) => {
-    const queryClient = useQueryClient();
     const [localRows, setLocalRows] = useState(data.rows);
 
     useEffect(() => {
@@ -167,20 +165,11 @@ export const MatrixGrid = ({ data, year, month }: MatrixGridProps) => {
     const totals = calculateTotals();
 
     // -- CRUD HANDLERS --
-    const navigate = useNavigate();
-    const handleAddClient = () => {
-        navigate('/clients');
-    };
-
-    const handleAddColumn = (dept: string) => {
-        toast.info(`Add Column to ${dept} coming soon`);
-    };
-
     const handleRowAction = (action: string, client_id: string) => {
         if (action === 'delete') {
-            toast.error("Delete functionality pending API");
+            toast.error(`Delete functionality pending API for ${client_id}`);
         } else if (action === 'duplicate') {
-            toast.success("Duplicate functionality pending API");
+            toast.success(`Duplicate functionality pending API for ${client_id}`);
         }
     };
 

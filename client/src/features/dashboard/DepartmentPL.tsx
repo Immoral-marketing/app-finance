@@ -603,8 +603,9 @@ export default function DepartmentPL() {
         const isPositive = ytdDiff >= 0;
 
         // Custom tooltip formatter
-        const currencyFormatter = (value: number) =>
-            value.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' €';
+        // Custom tooltip formatter
+        const currencyFormatter = (value: any) =>
+            Number(value || 0).toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' €';
 
         return (
             <div className="space-y-6 px-4 pb-6 pt-4">
@@ -817,7 +818,7 @@ export default function DepartmentPL() {
                                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                                 <YAxis tick={{ fontSize: 11 }} unit="%" domain={[0, 'auto']} />
                                 <Tooltip
-                                    formatter={(v: number) => `${v.toFixed(1)}%`}
+                                    formatter={(v: any) => `${Number(v).toFixed(1)}%`}
                                     contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
                                 />
                                 <Legend wrapperStyle={{ fontSize: '12px' }} />

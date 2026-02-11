@@ -4,9 +4,8 @@ import { adminApi } from '@/lib/api/admin';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { formatCurrency } from '@/lib/utils';
-import { Download, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { Download } from 'lucide-react';
 import {
-    BarChart,
     Bar,
     XAxis,
     YAxis,
@@ -23,7 +22,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 export default function PLReport() {
     const [year, setYear] = useState(new Date().getFullYear());
 
-    const { data: plData, isLoading } = useQuery({
+    const { data: plData } = useQuery({
         queryKey: ['pl', year],
         queryFn: () => adminApi.getPLSummary(year),
     });

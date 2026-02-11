@@ -10,8 +10,8 @@ import {
 import { BillingRecord } from "@/lib/api/admin"
 import { Button } from "@/components/ui/Button"
 import { Input } from "@/components/ui/Input"
-import { formatCurrency, formatPercentage } from "@/lib/utils"
-import { DEPARTMENTS, DEPARTMENT_COLORS } from "@/lib/constants"
+import { formatCurrency } from "@/lib/utils"
+import { DEPARTMENT_COLORS } from "@/lib/constants"
 import { ArrowUpDown } from "lucide-react"
 
 interface BillingTableProps {

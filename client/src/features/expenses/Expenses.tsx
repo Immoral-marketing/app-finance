@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/lib/api/admin';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
+import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { PeriodSelector } from '@/components/shared/PeriodSelector';
@@ -14,7 +14,6 @@ import {
     Edit,
     Split,
     Search,
-    FileText
 } from 'lucide-react';
 
 export default function ExpensesList() {

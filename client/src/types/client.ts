@@ -45,4 +45,4 @@ export interface CreateClientDTO {
     notes?: string;
 }
 
-export interface UpdateClientDTO extends Partial(CreateClientDTO) { }
+export type UpdateClientDTO = Partial<CreateClientDTO>;
