@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # Billing Microservice
+  billing-service:
+    build: ./services/billing-service
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=development
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./services/billing-service:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Expenses Microservice
+  expenses-service:
+    build: ./services/expenses-service
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - NODE_ENV=development
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./services/expenses-service:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Payroll Microservice
+  payroll-service:
+    build: ./services/payroll-service
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - NODE_ENV=development
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./services/payroll-service:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Commissions Microservice
+  commissions-service:
+    build: ./services/commissions-service
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - NODE_ENV=development
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./services/commissions-service:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Financial Periods Microservice
+  periods-service:
+    build: ./services/periods-service
+    ports:
+      - "3005:3005"
+    environment:
+      - PORT=3005
+      - NODE_ENV=development
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./services/periods-service:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # Frontend PWA
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_SUPABASE_URL=${SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - VITE_BILLING_SERVICE_URL=http://localhost:3001
+      - VITE_EXPENSES_SERVICE_URL=http://localhost:3002
+      - VITE_PAYROLL_SERVICE_URL=http://localhost:3003
+      - VITE_COMMISSIONS_SERVICE_URL=http://localhost:3004
+      - VITE_PERIODS_SERVICE_URL=http://localhost:3005
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    restart: unless-stopped
+    depends_on:
+      - billing-service
+      - expenses-service
+      - payroll-service
+      - commissions-service
+      - periods-service
+
+networks:
+  default:
+    name: immoral-finance-network

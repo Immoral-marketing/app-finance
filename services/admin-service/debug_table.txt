@@ -1,0 +1,27 @@
+﻿CLIENT                    | VERTICAL    | INVESTMENT | FEE_PAID | TAG
+-------------------------------------------------------------------------------------
+Angela Navarro            | Immoral      |       5900 |     1947 | GENERAL
+Bobo Choses               | Imfashion    |        400 |       84 | GENERAL
+Carrer                    | Imfashion    |          0 |      600 | GENERAL
+Delhi Chores              | Imfilms      |          0 |      700 | IMFILMS
+Embilco                   | Immoral      |        700 |      700 | GENERAL
+Forcadell                 | Immoral      |          0 |        0 | GENERAL
+Honey CombPack            | Immoral      |          0 |        0 | GENERAL
+Laconicum                 | Immoral      |          0 |        0 | GENERAL
+Netmind                   | Immoral      |          0 |        0 | GENERAL
+Nutfruit                  | N/A          |          0 |        0 | GENERAL
+Opcion Capital            | Immoral      |          0 |      255 | GENERAL
+Palatchi                  | Imfashion    |          0 |        0 | GENERAL
+Plana Fabrega             | Immoralia    |          0 |        0 | GENERAL
+Prueba                    | Imfilms      |          0 |      700 | IMFILMS
+Sttown                    | Imfashion    |          0 |        0 | GENERAL
+the Connector             | Imfilms      |          0 |      700 | IMFILMS
+the CoolBottles           | Immoral      |          0 |        0 | GENERAL
+Trent                     | Imfashion    |          0 |        0 | GENERAL
+True Artist               | Immoral      |          0 |        0 | GENERAL
+Velites                   | Immoral      |     300000 |    12000 | GENERAL
+Vertigo                   | Imfilms      |          0 |      500 | IMFILMS
+-------------------------------------------------------------------------------------
+TOTAL fee_paid: 18186
+Imfilms total: 2600
+Paid General (Total - Imfilms): 15586

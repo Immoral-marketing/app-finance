@@ -1,0 +1,62 @@
+﻿// DEPARTMENT MAPPINGS
+{
+  "Imcontent": "0a857e45-48a0-4918-953a-927ba864a310",
+  "Immedia": "a0e21f15-c65d-497f-885c-811bb2af4866",
+  "Immoralia": "ad1d47a5-8376-439d-9571-bf4fafb9b6c2",
+  "Immoral": "3799d6a9-cd0e-4152-9000-48b3952f19a1"
+}
+
+// CATEGORY MAPPINGS
+{
+  "Gastos de Personal": "6f6ab6a4-bfbe-46dd-b80a-8292e7d9ce0c",
+  "Alba": "d56f94a0-ab4a-4f4b-8678-d81a130d440e",
+  "Adri├ín": "86e822e1-e7eb-4af2-8e6b-3c280c6f3013",
+  "Yeray": "43ac2ab2-35a0-4322-8d40-3d106bf0cd7c",
+  "Bruna": "53b802b3-6c4c-4d51-bc06-264ab6003f51",
+  "Carla": "cb45daac-2b3f-43c2-ac9a-1a24f0853e4c",
+  "Comisiones": "bfd808f2-ef53-4258-9f7c-4c30ec9d2755",
+  "Marketing": "5c8eae4e-3712-40d6-a29d-363865e43b69",
+  "Formaci├│n": "ad8b4f6d-ab75-4782-b8b5-394d2eb2b502",
+  "Software": "19f88114-32fe-4a21-80d5-970c4735af0a",
+  "Gastos Operativos": "86b5ae65-1f5b-4211-9611-f022c717b141",
+  "Alquiler": "b60779fa-2dcc-4a89-a03c-da863d521453",
+  "Electricidad": "12cca512-4247-40c7-883d-4dde46363e05",
+  "Otros servicios": "412fb0dd-49d2-410b-8e7b-0ed5b2f1df44"
+}
+
+// SERVICE MAPPINGS
+{
+  "Ad Spend": "ac90fca9-7a44-433c-9fd7-7ee662579f7f",
+  "Setup inicial": "fd2f000e-46d4-4e75-85fe-8a4a63c3a8da",
+  "Branding": "f6ac2c6b-7175-45cd-88ae-6ba7f35a3045",
+  "Asesoria": "6550e6bf-45d2-440e-a094-adf3683294b3",
+  "Consultoria con IA": "fb634538-d175-43d7-89f7-3e6dfad4bee9",
+  "Audit Digital": "ba25ac3e-3e7c-4fdb-89e6-91586d3f1d35",
+  "Otros servicios": "1b2e0ffd-2fe3-4be1-851f-1a05a4d2b3a5",
+  "Fee Paid": "66342cdf-6d73-4edc-99e8-4d328465985f",
+  "Branding y gesti├│n de campa├▒a de Meta Media": "47bae460-5bf0-4a93-82a8-791f6a4696df",
+  "Producci├│n de creatividad": "4c43905a-4dcb-4d73-a2cb-44b5b5556758",
+  "Dise├▒o de embudos": "0dba1b0a-ad71-482c-ae58-6d64c90c82b1",
+  "Generaci├│n servicio de Fans con IA": "fd2f873b-cadb-4557-97e3-8620e61a5255",
+  "Servicio gesti├│n de Fans": "be2a664c-43d3-4385-9836-1c01dbf29970",
+  "Social Initial": "48539e80-360a-44a6-90c2-04e548666404",
+  "Advertising": "4e0a3ce8-8ae0-41fc-ad51-fc3199527e44",
+  "Creaci├│n de contenido de perf": "0b0f1f75-ae70-4f8f-bf4c-9a7d9c35eb87",
+  "BTC": "9041f1d3-cba0-4fbe-bd7e-3a1898875efe",
+  "Setup Inicial": "9ca14352-135c-4134-92fe-c95a9249bc18",
+  "SEO": "ad8128ed-9bc6-41fb-b471-f327e72a7cd4",
+  "Web dev": "fb1e0aa5-f036-446c-9ed2-cfd4fcbca4ef",
+  "Horas/Otros": "16fcc4f8-3eaf-450d-94b0-59a68c67e74e",
+  "Dise├▒o de Contenido": "0f06a762-2d23-449d-9e76-87e3019a245b",
+  "Generaci├│n de contenido con IA": "f136dd03-ebba-4574-a652-857493e98d98",
+  "Gesti├│n de RRSS": "bd7ec915-73bf-4852-b194-9d39fc337e25",
+  "Gesti├│n de Influencers y UGC": "e1a3583b-e958-4833-ae57-d463bc25368c",
+  "Agency Automation": "b4992793-b5d4-4e32-a4c3-7ceff9bd29b1",
+  "Consultor├¡a y automatizaci├│n de procesos": "fbbad4ba-2d30-4b01-a0c0-1db783df6d9e",
+  "Web Dev": "df7894c5-3298-4609-922f-29575152d681",
+  "Estrategia Digital": "fb54680d-c817-478f-8c3c-02215ab92201",
+  "Estrategia y Gesti├│n de Campa├▒as de Paid Media": "ed2a0f23-793a-41b0-b398-c7a92feb59fb",
+  "Set-up Inicial": "a297608c-4bee-444a-af32-ab5d7a7b0c27",
+  "Set-up Inicial IA": "adf6d295-9902-4b3f-b80d-d9d4fa05d2c6",
+  "Estrategia y Gesti├│n de marketing y email marketing": "14c0506c-b730-4a57-a051-fd4f14ecd288"
+}

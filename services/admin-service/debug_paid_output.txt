@@ -1,0 +1,35 @@
+﻿=== PAID MEDIA FROM FEE_PAID (monthly_billing) ===
+
+[GENERAL] Carrer: fee_paid=600 (Imfashion)
+[GENERAL] Velites: fee_paid=12000 (Immoral)
+[GENERAL] Bobo Choses: fee_paid=84 (Imfashion)
+[IMFILMS] Delhi Chores: fee_paid=700 (Imfilms)
+[IMFILMS] Vertigo: fee_paid=500 (Imfilms)
+[IMFILMS] Prueba: fee_paid=700 (Imfilms)
+[IMFILMS] the Connector: fee_paid=700 (Imfilms)
+[GENERAL] Angela Navarro: fee_paid=1947 (Immoral)
+[GENERAL] Embilco: fee_paid=700 (Immoral)
+[GENERAL] Opcion Capital: fee_paid=255 (Immoral)
+
+=== RESULTADO PARA P&L ===
+Total Fee Paid (columna Matrix): 18186
+Paid Imfilms: 2600
+Paid General (Total - Imfilms): 15586
+Verificaci├│n: 2600 + 15586 = 18186
+node : Assertion failed: 
+!(handle->flags & 
+UV_HANDLE_CLOSING), file 
+src\win\async.c, line 76
+En línea: 1 Carácter: 1
++ node scripts/debug_paid_simple.js 
+2>&1 | Out-File -Encoding utf8 debu 
+...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~
+    + CategoryInfo          : NotSpe 
+   cified: (Assertion faile...sync.  
+  c, line 76:String) [], RemoteExc   
+ eption
+    + FullyQualifiedErrorId : Native 
+   CommandError
+ 

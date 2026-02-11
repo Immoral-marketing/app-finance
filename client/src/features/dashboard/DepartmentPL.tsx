@@ -1,0 +1,1047 @@
+import React, { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { adminApi } from '@/lib/api/admin';
+import { Button } from '@/components/ui/Button';
+import { Download, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import {
+    BarChart, Bar, LineChart, Line, AreaChart, Area,
+    XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+    ReferenceLine
+} from 'recharts';
+
+const TABS = ['Dashboard', 'Real', 'Presupuesto', 'Comparación'] as const;
+type TabType = typeof TABS[number];
+
+const MONTHS = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+// All departments that map from URL to display & filter
+const DEPT_MAP: Record<string, { label: string; deptNames: string[] }> = {
+    immedia: { label: 'Immedia', deptNames: ['Immedia'] },
+    imcontent: { label: 'Imcontent', deptNames: ['Imcontent'] },
+    immoralia: { label: 'Immoralia', deptNames: ['Immoralia'] },
+};
+
+// Full revenue structure (same as PLMatrix)
+const REVENUE_STRUCTURE = [
+    { dept: 'Immedia', services: ['Paid General', 'Paid imfilms', 'Setup inicial'] },
+    { dept: 'Imcontent', services: ['Branding', 'Diseño', 'Contenido con IA', 'RRSS', 'Estrategia Digital', 'Influencers'] },
+    { dept: 'Immoralia', services: ['Setup inicial IA', 'Automation', 'Consultoría'] },
+    { dept: 'Imloyal', services: ['Web dev', 'CRM', 'Comisiones'] },
+    { dept: 'Imseo', services: ['SEO', 'Comisiones'] },
+    { dept: 'Immoral', services: ['Otros servicios', 'Otras comisiones'] },
+    { dept: 'Imcontent', services: ['Budget Nutfruit'] },
+    { dept: 'Imsales', services: ['Captación'] },
+];
+
+// Full expense structure (same as PLMatrix)
+const EXPENSE_STRUCTURE = {
+    personalItems: [
+        { dept: 'Immedia', items: ['Alba', 'Andrés', 'Leidy'] },
+        { dept: 'Imcontent', items: ['Flor', 'Bruno', 'Grego', 'Silvia', 'Angie'] },
+        { dept: 'Immoralia', items: ['David', 'Manel'] },
+        { dept: 'Immoral', items: ['Daniel', 'Mery', 'Yure', 'Marco', 'Externos puntuales'] },
+        { dept: 'Immedia', items: ['Externos'] },
+        { dept: 'Imcontent', items: ['Externos'] },
+        { dept: 'Immoralia', items: ['Externos'] },
+        { dept: 'Imsales', items: ['Jorge Orts'] },
+    ],
+    comisionesItems: [
+        { dept: 'Imfilms', items: ['The connector'] },
+        { dept: 'Imcontent', items: ['Marc'] },
+        { dept: 'Imseo', items: ['Christian'] },
+        { dept: 'Imfashion', items: ['Gemelos'] },
+        { dept: 'Imsales', items: ['Jorge'] },
+        { dept: 'Imfilms', items: ['Olga'] },
+    ],
+    marketingItems: [
+        { dept: 'Imfilms', items: ['Marketing'] },
+        { dept: 'Imcontent', items: ['Marketing'] },
+        { dept: 'Immedia', items: ['Marketing'] },
+        { dept: 'Immoralia', items: ['Marketing'] },
+        { dept: 'Imsales', items: ['Marketing'] },
+        { dept: 'Immoral', items: ['Marketing'] },
+        { dept: 'Imfashion', items: ['Marketing'] },
+    ],
+    formacionItems: [
+        { dept: 'Imcontent', items: ['Formación'] },
+        { dept: 'Immedia', items: ['Formación'] },
+        { dept: 'Immoralia', items: ['Formación'] },
+        { dept: 'Imsales', items: ['Formación'] },
+        { dept: 'Immoral', items: ['Formación'] },
+        { dept: 'Imfashion', items: ['Formación'] },
+    ],
+    softwareItems: [
+        { dept: 'Immoral', items: ['Software'] },
+        { dept: 'Immedia', items: ['Software'] },
+        { dept: 'Imcontent', items: ['Software'] },
+        { dept: 'Immoralia', items: ['Software'] },
+        { dept: 'Imsales', items: ['Software'] },
+    ],
+    gastosOpItems: [
+        { dept: 'Immoral', items: ['Alquiler', 'Asesoría', 'Suministros', 'Viajes y reuniones', 'Coche de empresa', 'Otras compras', 'Financiamiento (Línea de crédito)'] },
+    ],
+    adspentItems: [
+        { dept: 'Immedia', items: ['Adspent'] },
+        { dept: 'Imcontent', items: ['Adspent Nutfruit', 'Influencers'] },
+    ]
+};
+
+// Filter a structure array by department names
+function filterByDept(
+    items: { dept: string; items?: string[]; services?: string[] }[],
+    deptNames: string[]
+): { dept: string; items: string[]; services?: string[] }[] {
+    return items
+        .filter(g => deptNames.includes(g.dept))
+        .map(g => ({
+            ...g,
+            items: g.items || g.services || [],
+        }));
+}
+
+export default function DepartmentPL() {
+    const { deptCode } = useParams<{ deptCode: string }>();
+    const config = DEPT_MAP[deptCode || ''];
+    const deptNames = config?.deptNames || [deptCode || ''];
+    const deptLabel = config?.label || deptCode || 'Departamento';
+
+    const [year, setYear] = useState(new Date().getFullYear());
+    const [activeTab, setActiveTab] = useState<TabType>('Dashboard');
+    const [cellValues, setCellValues] = useState<Record<string, number>>({});
+
+    const typeParam = activeTab === 'Presupuesto' ? 'budget' : 'real';
+
+    // Fetch for Real/Presupuesto/Dashboard
+    const { data: matrixData, isLoading } = useQuery({
+        queryKey: ['pl-matrix', year, typeParam],
+        queryFn: () => adminApi.getPLMatrix(year, typeParam),
+        enabled: activeTab !== 'Comparación',
+        refetchOnWindowFocus: true,
+        staleTime: 0
+    });
+
+    // Fetch both for Comparación and Dashboard
+    const { data: realData } = useQuery({
+        queryKey: ['pl-matrix', year, 'real'],
+        queryFn: () => adminApi.getPLMatrix(year, 'real' as 'budget' | 'real'),
+        refetchOnWindowFocus: true,
+        staleTime: 0
+    });
+
+    const { data: budgetData } = useQuery({
+        queryKey: ['pl-matrix', year, 'budget'],
+        queryFn: () => adminApi.getPLMatrix(year, 'budget'),
+        refetchOnWindowFocus: true,
+        staleTime: 0
+    });
+
+    // Clear cellValues when switching tabs
+    useEffect(() => {
+        setCellValues({});
+    }, [typeParam]);
+
+    // Populate cellValues from API data
+    useEffect(() => {
+        if (!matrixData?.sections) return;
+
+        const newValues: Record<string, number> = {};
+
+        const revenueSection = matrixData.sections.find((s: any) => s.code === 'REVENUE');
+        if (revenueSection?.rows) {
+            revenueSection.rows.forEach((row: any) => {
+                if (row.values && row.dept && row.name) {
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        const key = `revenue-${row.dept}-${row.name}-${monthIdx}-${typeParam}`;
+                        newValues[key] = val || 0;
+                    });
+                }
+            });
+        }
+
+        const expenseSection = matrixData.sections.find((s: any) => s.code === 'EXPENSES');
+        if (expenseSection?.rows) {
+            expenseSection.rows.forEach((row: any) => {
+                if (row.values && row.name) {
+                    if (Array.isArray(row.values)) {
+                        row.values.forEach((val: number, monthIdx: number) => {
+                            const dept = row.dept || 'General';
+                            const key = `expense-${dept}-${row.name}-${monthIdx}-${typeParam}`;
+                            newValues[key] = val || 0;
+                        });
+                    }
+                }
+            });
+        }
+
+        setCellValues(prev => ({ ...prev, ...newValues }));
+    }, [matrixData, typeParam]);
+
+    // Populate comparison data
+    const [compRealValues, setCompRealValues] = useState<Record<string, number>>({});
+    const [compBudgetValues, setCompBudgetValues] = useState<Record<string, number>>({});
+
+    useEffect(() => {
+        if (!realData?.sections) return;
+        const vals: Record<string, number> = {};
+        const revenueSection = realData.sections.find((s: any) => s.code === 'REVENUE');
+        revenueSection?.rows?.forEach((row: any) => {
+            if (row.values && row.dept && row.name) {
+                row.values.forEach((val: number, monthIdx: number) => {
+                    vals[`revenue-${row.dept}-${row.name}-${monthIdx}`] = val || 0;
+                });
+            }
+        });
+        const expenseSection = realData.sections.find((s: any) => s.code === 'EXPENSES');
+        expenseSection?.rows?.forEach((row: any) => {
+            if (row.values && row.name && Array.isArray(row.values)) {
+                row.values.forEach((val: number, monthIdx: number) => {
+                    vals[`expense-${row.dept || 'General'}-${row.name}-${monthIdx}`] = val || 0;
+                });
+            }
+        });
+        setCompRealValues(vals);
+    }, [realData]);
+
+    useEffect(() => {
+        if (!budgetData?.sections) return;
+        const vals: Record<string, number> = {};
+        const revenueSection = budgetData.sections.find((s: any) => s.code === 'REVENUE');
+        revenueSection?.rows?.forEach((row: any) => {
+            if (row.values && row.dept && row.name) {
+                row.values.forEach((val: number, monthIdx: number) => {
+                    vals[`revenue-${row.dept}-${row.name}-${monthIdx}`] = val || 0;
+                });
+            }
+        });
+        const expenseSection = budgetData.sections.find((s: any) => s.code === 'EXPENSES');
+        expenseSection?.rows?.forEach((row: any) => {
+            if (row.values && row.name && Array.isArray(row.values)) {
+                row.values.forEach((val: number, monthIdx: number) => {
+                    vals[`expense-${row.dept || 'General'}-${row.name}-${monthIdx}`] = val || 0;
+                });
+            }
+        });
+        setCompBudgetValues(vals);
+    }, [budgetData]);
+
+    const getCellKey = (section: string, dept: string, item: string, monthIdx: number) => {
+        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
+        return `${normalizedSection}-${dept}-${item}-${monthIdx}-${typeParam}`;
+    };
+
+    const getCellValue = (section: string, dept: string, item: string, monthIdx: number): number => {
+        return cellValues[getCellKey(section, dept, item, monthIdx)] || 0;
+    };
+
+    const fmtCurrency = (val: number) => Math.round(val * 100) / 100;
+
+    const fmtDisplay = (val: number) => {
+        const rounded = fmtCurrency(val);
+        return rounded.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    };
+
+    const calculateRowTotal = (section: string, dept: string, item: string): number => {
+        let total = 0;
+        for (let i = 0; i < 12; i++) {
+            total += getCellValue(section, dept, item, i);
+        }
+        return fmtCurrency(total);
+    };
+
+    const calculateSectionTotal = (section: string, structure: { dept: string; items?: string[]; services?: string[] }[]): number[] => {
+        const totals = Array(12).fill(0);
+        structure.forEach(group => {
+            const items = group.items || group.services || [];
+            items.forEach(item => {
+                for (let i = 0; i < 12; i++) {
+                    totals[i] += getCellValue(section, group.dept, item, i);
+                }
+            });
+        });
+        return totals.map(t => fmtCurrency(t));
+    };
+
+    // --- Comparison helpers ---
+    const getCompValue = (source: Record<string, number>, section: string, dept: string, item: string, monthIdx: number): number => {
+        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
+        return source[`${normalizedSection}-${dept}-${item}-${monthIdx}`] || 0;
+    };
+
+    const calcCompSectionTotal = (source: Record<string, number>, section: string, structure: { dept: string; items?: string[]; services?: string[] }[]): number[] => {
+        const totals = Array(12).fill(0);
+        structure.forEach(group => {
+            const items = group.items || group.services || [];
+            items.forEach(item => {
+                for (let i = 0; i < 12; i++) {
+                    totals[i] += getCompValue(source, section, group.dept, item, i);
+                }
+            });
+        });
+        return totals.map(t => fmtCurrency(t));
+    };
+
+    // --- Filter structures for this department ---
+    const deptRevenue = REVENUE_STRUCTURE.filter(g => deptNames.includes(g.dept));
+    const deptPersonal = filterByDept(EXPENSE_STRUCTURE.personalItems, deptNames);
+    const deptComisiones = filterByDept(EXPENSE_STRUCTURE.comisionesItems, deptNames);
+    const deptMarketing = filterByDept(EXPENSE_STRUCTURE.marketingItems, deptNames);
+    const deptFormacion = filterByDept(EXPENSE_STRUCTURE.formacionItems, deptNames);
+    const deptSoftware = filterByDept(EXPENSE_STRUCTURE.softwareItems, deptNames);
+    const deptGastosOp = filterByDept(EXPENSE_STRUCTURE.gastosOpItems, deptNames);
+    const deptAdspent = filterByDept(EXPENSE_STRUCTURE.adspentItems, deptNames);
+
+    // All expense categories for this department
+    const expCats = [
+        { key: 'personal', label: 'Personal', items: deptPersonal },
+        { key: 'comisiones', label: 'Comisiones', items: deptComisiones },
+        { key: 'marketing', label: 'Marketing', items: deptMarketing },
+        { key: 'formacion', label: 'Formación', items: deptFormacion },
+        { key: 'software', label: 'Software', items: deptSoftware },
+        { key: 'adspent', label: deptCode === 'imcontent' ? 'Adspent / Influencers' : 'Adspent', items: deptAdspent },
+        { key: 'gastosOp', label: 'Gastos Operativos', items: deptGastosOp },
+    ].filter(cat => cat.items.length > 0);
+
+    // --- Read-only cell renderer ---
+    const renderReadOnlyCell = (section: string, dept: string, item: string, monthIdx: number) => {
+        const value = getCellValue(section, dept, item, monthIdx);
+        return (
+            <td key={monthIdx} className="border border-gray-200 px-1 py-1 text-right text-xs tabular-nums">
+                {value ? fmtDisplay(value) : <span className="text-gray-300">0</span>}
+            </td>
+        );
+    };
+
+    const renderRevenueRows = () => {
+        const rows: React.ReactNode[] = [];
+        deptRevenue.forEach((group, groupIdx) => {
+            group.services.forEach((service, serviceIdx) => {
+                rows.push(
+                    <tr key={`rev-${groupIdx}-${serviceIdx}`} className="hover:bg-gray-50">
+                        {serviceIdx === 0 ? (
+                            <td
+                                rowSpan={group.services.length}
+                                className="border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 align-middle text-center"
+                            >
+                                {group.dept}
+                            </td>
+                        ) : null}
+                        <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">
+                            {service}
+                        </td>
+                        {MONTHS.map((_, monthIdx) => renderReadOnlyCell('revenue', group.dept, service, monthIdx))}
+                        <td className="border border-gray-200 px-1 py-1 text-right text-xs font-medium bg-gray-50 tabular-nums">
+                            {fmtDisplay(calculateRowTotal('revenue', group.dept, service))}
+                        </td>
+                    </tr>
+                );
+            });
+        });
+        return rows;
+    };
+
+    const renderExpenseCategory = (
+        categoryName: string,
+        items: { dept: string; items: string[] }[],
+        sectionKey: string,
+        bgColor: string = 'bg-orange-50'
+    ) => {
+        if (items.length === 0) return null;
+
+        const rows: React.ReactNode[] = [];
+        const categoryTotals = calculateSectionTotal(sectionKey, items);
+        const categoryAnnual = categoryTotals.reduce((a, b) => a + b, 0);
+
+        // Category header
+        rows.push(
+            <tr key={`cat-${sectionKey}`} className={bgColor}>
+                <td className="border border-orange-200 px-2 py-1.5 text-xs font-semibold text-orange-800"></td>
+                <td className="border border-orange-200 px-2 py-1.5 text-xs font-semibold text-orange-800">
+                    {categoryName}
+                </td>
+                {categoryTotals.map((val, i) => (
+                    <td key={i} className="border border-orange-200 px-1 py-1.5 text-right text-xs font-medium text-orange-700 tabular-nums">
+                        {fmtDisplay(val)}
+                    </td>
+                ))}
+                <td className="border border-orange-200 px-1 py-1.5 text-right text-xs font-semibold text-orange-800 tabular-nums">
+                    {fmtDisplay(categoryAnnual)}
+                </td>
+            </tr>
+        );
+
+        // Item rows
+        items.forEach((group, groupIdx) => {
+            group.items.forEach((item, itemIdx) => {
+                rows.push(
+                    <tr key={`${sectionKey}-${groupIdx}-${itemIdx}`} className="hover:bg-gray-50">
+                        {itemIdx === 0 ? (
+                            <td
+                                rowSpan={group.items.length}
+                                className="border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 align-middle text-center"
+                            >
+                                {group.dept}
+                            </td>
+                        ) : null}
+                        <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">
+                            {item}
+                        </td>
+                        {MONTHS.map((_, monthIdx) => renderReadOnlyCell(sectionKey, group.dept, item, monthIdx))}
+                        <td className="border border-gray-200 px-1 py-1 text-right text-xs font-medium bg-gray-50 tabular-nums">
+                            {fmtDisplay(calculateRowTotal(sectionKey, group.dept, item))}
+                        </td>
+                    </tr>
+                );
+            });
+        });
+
+        // Spacer
+        rows.push(
+            <tr key={`spacer-${sectionKey}`}>
+                <td colSpan={15} className="border border-gray-100 py-1 bg-white"></td>
+            </tr>
+        );
+
+        return rows;
+    };
+
+    // --- Comparison rendering ---
+    const renderComparisonTable = () => {
+        const realRevTotals = calcCompSectionTotal(compRealValues, 'revenue', deptRevenue);
+        const budgetRevTotals = calcCompSectionTotal(compBudgetValues, 'revenue', deptRevenue);
+        const diffRevTotals = realRevTotals.map((v, i) => fmtCurrency(v - budgetRevTotals[i]));
+
+        const realExpTotals = Array(12).fill(0);
+        const budgetExpTotals = Array(12).fill(0);
+        expCats.forEach(cat => {
+            const rTotals = calcCompSectionTotal(compRealValues, cat.key, cat.items);
+            const bTotals = calcCompSectionTotal(compBudgetValues, cat.key, cat.items);
+            rTotals.forEach((v, i) => realExpTotals[i] += v);
+            bTotals.forEach((v, i) => budgetExpTotals[i] += v);
+        });
+        const diffExpTotals = realExpTotals.map((v, i) => fmtCurrency(v - budgetExpTotals[i]));
+
+        const realEbitda = realRevTotals.map((v, i) => fmtCurrency(v - realExpTotals[i]));
+        const budgetEbitda = budgetRevTotals.map((v, i) => fmtCurrency(v - budgetExpTotals[i]));
+        const diffEbitda = realEbitda.map((v, i) => fmtCurrency(v - budgetEbitda[i]));
+
+        const renderCompRow = (label: string, realVals: number[], budgetVals: number[], diffVals: number[], bold: boolean = false, bgClass: string = '') => (
+            <>
+                <tr className={`${bgClass} ${bold ? 'font-bold' : ''}`}>
+                    <td rowSpan={3} className={`border border-gray-300 px-2 py-1 text-xs ${bold ? 'font-bold' : 'font-medium'} text-gray-800 align-middle`}>
+                        {label}
+                    </td>
+                    <td className="border border-gray-200 px-2 py-0.5 text-xs text-blue-700 font-medium">Real</td>
+                    {realVals.map((v, i) => <td key={i} className="border border-gray-200 px-1 py-0.5 text-right text-xs tabular-nums">{fmtDisplay(v)}</td>)}
+                    <td className="border border-gray-200 px-1 py-0.5 text-right text-xs font-medium bg-gray-50 tabular-nums">{fmtDisplay(fmtCurrency(realVals.reduce((a, b) => a + b, 0)))}</td>
+                </tr>
+                <tr className={bgClass}>
+                    <td className="border border-gray-200 px-2 py-0.5 text-xs text-green-700 font-medium">Presup.</td>
+                    {budgetVals.map((v, i) => <td key={i} className="border border-gray-200 px-1 py-0.5 text-right text-xs tabular-nums">{fmtDisplay(v)}</td>)}
+                    <td className="border border-gray-200 px-1 py-0.5 text-right text-xs font-medium bg-gray-50 tabular-nums">{fmtDisplay(fmtCurrency(budgetVals.reduce((a, b) => a + b, 0)))}</td>
+                </tr>
+                <tr className={bgClass}>
+                    <td className="border border-gray-200 px-2 py-0.5 text-xs text-red-700 font-medium">Dif.</td>
+                    {diffVals.map((v, i) => <td key={i} className={`border border-gray-200 px-1 py-0.5 text-right text-xs tabular-nums ${v > 0 ? 'text-green-700' : v < 0 ? 'text-red-600' : ''}`}>{fmtDisplay(v)}</td>)}
+                    <td className={`border border-gray-200 px-1 py-0.5 text-right text-xs font-medium bg-gray-50 tabular-nums ${fmtCurrency(diffVals.reduce((a, b) => a + b, 0)) >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                        {fmtDisplay(fmtCurrency(diffVals.reduce((a, b) => a + b, 0)))}
+                    </td>
+                </tr>
+            </>
+        );
+
+        return (
+            <div className="overflow-x-auto px-2">
+                <table className="w-full border-collapse text-xs" style={{ minWidth: '1200px' }}>
+                    <thead>
+                        <tr className="bg-white">
+                            <th className="border border-gray-300 px-2 py-2 text-left font-medium" style={{ width: '140px' }}>Concepto</th>
+                            <th className="border border-gray-300 px-2 py-2 text-left font-medium" style={{ width: '70px' }}>Tipo</th>
+                            {MONTHS.map((month, i) => (
+                                <th key={i} className="border border-gray-300 px-1 py-2 text-center font-medium text-xs" style={{ width: '70px', minWidth: '70px' }}>
+                                    {month}
+                                </th>
+                            ))}
+                            <th className="border border-gray-300 px-1 py-2 text-center font-semibold text-xs bg-gray-100" style={{ width: '80px', minWidth: '80px' }}>
+                                Anual
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {renderCompRow('INGRESOS', realRevTotals, budgetRevTotals, diffRevTotals, true, 'bg-purple-50')}
+                        <tr><td colSpan={15} className="py-1 bg-white border-0"></td></tr>
+                        {renderCompRow('GASTOS', realExpTotals.map(v => fmtCurrency(v)), budgetExpTotals.map(v => fmtCurrency(v)), diffExpTotals, true, 'bg-orange-50')}
+                        <tr><td colSpan={15} className="py-1 bg-white border-0"></td></tr>
+                        {renderCompRow('EBITDA', realEbitda, budgetEbitda, diffEbitda, true, 'bg-blue-50')}
+                        <tr><td colSpan={15} className="py-1 bg-white border-0"></td></tr>
+                        {renderCompRow('RESULTADO', realEbitda, budgetEbitda, diffEbitda, true, 'bg-green-50')}
+                    </tbody>
+                </table>
+            </div>
+        );
+    };
+
+    // --- Dashboard Tab: Rich visual dashboard with charts ---
+    const renderDashboardTab = () => {
+        // Use Real data for Dashboard view
+        const revTotals = calcCompSectionTotal(compRealValues, 'revenue', deptRevenue);
+        const revAnual = fmtCurrency(revTotals.reduce((a, b) => a + b, 0));
+
+        // Budget revenue for comparison
+        const budgetRevTotals = calcCompSectionTotal(compBudgetValues, 'revenue', deptRevenue);
+
+        // === TOTAL GENERAL revenue (all depts) for Group % calculation ===
+        const totalGeneralRevenue = Array(12).fill(0);
+        REVENUE_STRUCTURE.forEach(group => {
+            group.services.forEach(service => {
+                for (let i = 0; i < 12; i++) {
+                    totalGeneralRevenue[i] += getCompValue(compRealValues, 'revenue', group.dept, service, i);
+                }
+            });
+        });
+
+        // === Group % = dept revenue / total general revenue per month ===
+        const groupPct = revTotals.map((v, i) =>
+            totalGeneralRevenue[i] > 0 ? fmtCurrency((v / totalGeneralRevenue[i]) * 100) : 0
+        );
+
+        // === Immoral gastosOp total per month (general company expenses) ===
+        const immoralGastosOp = EXPENSE_STRUCTURE.gastosOpItems;
+        const gastosGeneralesMonthly = Array(12).fill(0);
+        immoralGastosOp.forEach(group => {
+            group.items.forEach(item => {
+                for (let i = 0; i < 12; i++) {
+                    gastosGeneralesMonthly[i] += getCompValue(compRealValues, 'gastosOp', group.dept, item, i);
+                }
+            });
+        });
+
+        // === Group cost = gastosGenerales * Group% ===
+        const groupCostMonthly = groupPct.map((pct, i) =>
+            fmtCurrency(gastosGeneralesMonthly[i] * (pct / 100))
+        );
+
+        // Calculate each expense category monthly
+        const catMonthly: { label: string; totals: number[] }[] = [];
+        let totalExpMonthly = Array(12).fill(0);
+        let budgetExpMonthly = Array(12).fill(0);
+
+        expCats.forEach(cat => {
+            const totals = calcCompSectionTotal(compRealValues, cat.key, cat.items);
+            const bTotals = calcCompSectionTotal(compBudgetValues, cat.key, cat.items);
+            catMonthly.push({ label: cat.label, totals });
+            totals.forEach((v, i) => totalExpMonthly[i] += v);
+            bTotals.forEach((v, i) => budgetExpMonthly[i] += v);
+        });
+        totalExpMonthly = totalExpMonthly.map(v => fmtCurrency(v));
+        budgetExpMonthly = budgetExpMonthly.map(v => fmtCurrency(v));
+
+        // Total expenses INCLUDING Group cost
+        const totalExpWithGroup = totalExpMonthly.map((v, i) => fmtCurrency(v + groupCostMonthly[i]));
+
+        const resultadoMonthly = revTotals.map((v, i) => fmtCurrency(v - totalExpWithGroup[i]));
+        const resultadoAnual = fmtCurrency(revAnual - totalExpWithGroup.reduce((a, b) => a + b, 0));
+
+        const budgetResultadoMonthly = budgetRevTotals.map((v, i) => fmtCurrency(v - budgetExpMonthly[i]));
+
+        // Current month index (0-indexed)
+        const currentMonth = new Date().getMonth();
+
+        // --- Chart Data ---
+        const MONTH_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+        // 1) Ventas vs Gastos bar chart data
+        const salesVsExpenseData = MONTH_SHORT.map((m, i) => ({
+            name: m,
+            Ventas: fmtCurrency(revTotals[i]),
+            Gastos: fmtCurrency(totalExpWithGroup[i]),
+        }));
+
+        // 2) Dept % of total general billing per month
+        const deptPctData = MONTH_SHORT.map((m, i) => ({
+            name: m,
+            [`${deptLabel} %`]: groupPct[i],
+        }));
+
+        // 3) Expense trend line data (per category)
+        const expenseTrendData = MONTH_SHORT.map((m, i) => {
+            const point: Record<string, string | number> = { name: m };
+            catMonthly.forEach(cat => {
+                point[cat.label] = fmtCurrency(cat.totals[i]);
+            });
+            point['Group %'] = fmtCurrency(groupCostMonthly[i]);
+            point['Total'] = fmtCurrency(totalExpWithGroup[i]);
+            return point;
+        });
+
+        // Expense category colors
+        const expColors = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'];
+
+        // 4) Budget alert: compare real vs budget for recent months
+        const alertMonths: { month: string; idx: number; realResult: number; budgetResult: number; diff: number; pct: number }[] = [];
+        for (let i = 0; i <= currentMonth; i++) {
+            const realRes = resultadoMonthly[i];
+            const budgetRes = budgetResultadoMonthly[i];
+            const diff = fmtCurrency(realRes - budgetRes);
+            const pct = budgetRes !== 0 ? fmtCurrency((diff / Math.abs(budgetRes)) * 100) : 0;
+            alertMonths.push({
+                month: MONTHS[i],
+                idx: i,
+                realResult: realRes,
+                budgetResult: budgetRes,
+                diff,
+                pct
+            });
+        }
+
+        // Overall YTD performance
+        const ytdReal = resultadoMonthly.slice(0, currentMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdBudget = budgetResultadoMonthly.slice(0, currentMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdDiff = fmtCurrency(ytdReal - ytdBudget);
+        const ytdPct = ytdBudget !== 0 ? fmtCurrency((ytdDiff / Math.abs(ytdBudget)) * 100) : 0;
+        const isPositive = ytdDiff >= 0;
+
+        // Custom tooltip formatter
+        const currencyFormatter = (value: number) =>
+            value.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' €';
+
+        return (
+            <div className="space-y-6 px-4 pb-6 pt-4">
+                {/* === BUDGET ALERT BANNER === */}
+                <div className={`rounded-xl border-2 p-4 ${isPositive
+                    ? 'bg-gradient-to-r from-emerald-50 to-green-50 border-emerald-200'
+                    : 'bg-gradient-to-r from-red-50 to-orange-50 border-red-200'
+                    }`}>
+                    <div className="flex items-center gap-3 mb-3">
+                        {isPositive ? (
+                            <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                        ) : (
+                            <AlertTriangle className="h-6 w-6 text-red-500" />
+                        )}
+                        <div>
+                            <h3 className={`font-bold text-base ${isPositive ? 'text-emerald-800' : 'text-red-800'}`}>
+                                {isPositive ? '✅ Rendimiento por encima del presupuesto' : '⚠️ Rendimiento por debajo del presupuesto'}
+                            </h3>
+                            <p className={`text-sm ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+                                Acumulado YTD: <strong>{fmtDisplay(ytdDiff)} €</strong> ({ytdPct > 0 ? '+' : ''}{ytdPct}%) vs presupuesto
+                            </p>
+                        </div>
+                        <div className="ml-auto flex items-center gap-2">
+                            {isPositive ? <TrendingUp className="h-8 w-8 text-emerald-500" /> : <TrendingDown className="h-8 w-8 text-red-400" />}
+                        </div>
+                    </div>
+
+                    {/* Monthly chips */}
+                    <div className="flex gap-1.5 flex-wrap">
+                        {alertMonths.map(am => {
+                            const ok = am.diff >= 0;
+                            return (
+                                <div
+                                    key={am.idx}
+                                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${ok
+                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                        : 'bg-red-100 text-red-800 border border-red-200'
+                                        }`}
+                                    title={`Real: ${fmtDisplay(am.realResult)} € | Presup: ${fmtDisplay(am.budgetResult)} € | Dif: ${fmtDisplay(am.diff)} €`}
+                                >
+                                    {ok ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
+                                    {am.month.slice(0, 3)}
+                                    <span className="font-bold">{am.diff > 0 ? '+' : ''}{fmtDisplay(am.diff)}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* === SUMMARY TABLE (FIRST) === */}
+                <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+                    <h3 className="text-sm font-bold text-gray-800 px-5 pt-4 pb-2">📋 Resumen Mensual</h3>
+                    <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-xs" style={{ minWidth: '1200px' }}>
+                            <thead>
+                                <tr className="bg-white">
+                                    <th className="border border-gray-300 px-2 py-2 text-left font-medium" style={{ width: '180px' }}>Concepto</th>
+                                    {MONTHS.map((month, i) => (
+                                        <th key={i} className="border border-gray-300 px-1 py-2 text-center font-medium text-xs" style={{ width: '70px', minWidth: '70px' }}>
+                                            {month}
+                                        </th>
+                                    ))}
+                                    <th className="border border-gray-300 px-1 py-2 text-center font-semibold text-xs bg-gray-100" style={{ width: '90px', minWidth: '90px' }}>
+                                        Anual
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {/* Facturación */}
+                                <tr className="bg-purple-100">
+                                    <td className="border border-purple-300 px-2 py-2 font-bold text-purple-900 text-xs">
+                                        Facturación
+                                    </td>
+                                    {revTotals.map((val, i) => (
+                                        <td key={i} className="border border-purple-300 px-1 py-2 text-right font-semibold text-purple-800 tabular-nums">
+                                            {fmtDisplay(val)}
+                                        </td>
+                                    ))}
+                                    <td className="border border-purple-300 px-1 py-2 text-right font-bold text-purple-900 tabular-nums">
+                                        {fmtDisplay(revAnual)}
+                                    </td>
+                                </tr>
+
+                                {/* Spacer */}
+                                <tr><td colSpan={14} className="py-1 bg-white border-0"></td></tr>
+
+                                {/* Expense breakdown rows */}
+                                {catMonthly.map((cat, idx) => (
+                                    <tr key={idx} className="hover:bg-gray-50">
+                                        <td className="border border-gray-200 px-2 py-1.5 text-xs font-medium text-gray-700">
+                                            {cat.label}
+                                        </td>
+                                        {cat.totals.map((val, i) => (
+                                            <td key={i} className="border border-gray-200 px-1 py-1.5 text-right text-xs text-red-600 tabular-nums">
+                                                {val ? fmtDisplay(val) : <span className="text-gray-300">0</span>}
+                                            </td>
+                                        ))}
+                                        <td className="border border-gray-200 px-1 py-1.5 text-right text-xs font-medium text-red-700 bg-gray-50 tabular-nums">
+                                            {fmtDisplay(fmtCurrency(cat.totals.reduce((a, b) => a + b, 0)))}
+                                        </td>
+                                    </tr>
+                                ))}
+
+                                {/* Total Gastos (without Group) */}
+                                <tr className="bg-orange-100">
+                                    <td className="border border-orange-300 px-2 py-1.5 font-bold text-orange-900 text-xs">
+                                        Total Gastos Directos
+                                    </td>
+                                    {totalExpMonthly.map((val, i) => (
+                                        <td key={i} className="border border-orange-300 px-1 py-1.5 text-right font-semibold text-orange-800 tabular-nums">
+                                            {fmtDisplay(val)}
+                                        </td>
+                                    ))}
+                                    <td className="border border-orange-300 px-1 py-1.5 text-right font-bold text-orange-900 tabular-nums">
+                                        {fmtDisplay(fmtCurrency(totalExpMonthly.reduce((a, b) => a + b, 0)))}
+                                    </td>
+                                </tr>
+
+                                {/* Spacer */}
+                                <tr><td colSpan={14} className="py-1 bg-white border-0"></td></tr>
+
+                                {/* Group % row */}
+                                <tr className="bg-indigo-50">
+                                    <td className="border border-indigo-200 px-2 py-1.5 text-xs font-semibold text-indigo-800">
+                                        Group % <span className="font-normal text-indigo-500">({deptLabel})</span>
+                                    </td>
+                                    {groupPct.map((pct, i) => (
+                                        <td key={i} className="border border-indigo-200 px-1 py-1.5 text-right text-xs font-medium text-indigo-700 tabular-nums">
+                                            {pct > 0 ? `${pct.toFixed(1)}%` : <span className="text-gray-300">—</span>}
+                                        </td>
+                                    ))}
+                                    <td className="border border-indigo-200 px-1 py-1.5 text-right text-xs font-bold text-indigo-800 bg-indigo-100 tabular-nums">
+                                        {revAnual > 0 && totalGeneralRevenue.reduce((a, b) => a + b, 0) > 0
+                                            ? `${fmtCurrency((revAnual / totalGeneralRevenue.reduce((a, b) => a + b, 0)) * 100).toFixed(1)}%`
+                                            : '—'}
+                                    </td>
+                                </tr>
+
+                                {/* Group cost row (allocated general expenses) */}
+                                <tr className="bg-indigo-50/50">
+                                    <td className="border border-indigo-200 px-2 py-1.5 text-xs font-medium text-indigo-700">
+                                        Gastos Generales (Group)
+                                    </td>
+                                    {groupCostMonthly.map((val, i) => (
+                                        <td key={i} className="border border-indigo-200 px-1 py-1.5 text-right text-xs text-red-600 tabular-nums">
+                                            {val > 0 ? fmtDisplay(val) : <span className="text-gray-300">0</span>}
+                                        </td>
+                                    ))}
+                                    <td className="border border-indigo-200 px-1 py-1.5 text-right text-xs font-medium text-red-700 bg-indigo-100 tabular-nums">
+                                        {fmtDisplay(fmtCurrency(groupCostMonthly.reduce((a, b) => a + b, 0)))}
+                                    </td>
+                                </tr>
+
+                                {/* Spacer */}
+                                <tr><td colSpan={14} className="py-1 bg-white border-0"></td></tr>
+
+                                {/* Resultado */}
+                                <tr className="bg-green-100">
+                                    <td className="border border-green-400 px-2 py-2 font-bold text-green-900 text-sm">
+                                        Resultado
+                                    </td>
+                                    {resultadoMonthly.map((val, i) => (
+                                        <td key={i} className={`border border-green-400 px-1 py-2 text-right font-bold tabular-nums ${val >= 0 ? 'text-green-800' : 'text-red-600'}`}>
+                                            {fmtDisplay(val)}
+                                        </td>
+                                    ))}
+                                    <td className={`border border-green-400 px-1 py-2 text-right font-bold text-sm tabular-nums ${resultadoAnual >= 0 ? 'text-green-900' : 'text-red-600'}`}>
+                                        {fmtDisplay(resultadoAnual)}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                {/* === CHARTS GRID (AFTER SUMMARY TABLE) === */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Chart 1: Ventas vs Gastos */}
+                    <div className="bg-white rounded-xl border p-5 shadow-sm">
+                        <h3 className="text-sm font-bold text-gray-800 mb-4">📊 Ventas vs Gastos por Mes</h3>
+                        <ResponsiveContainer width="100%" height={280}>
+                            <BarChart data={salesVsExpenseData} barGap={2}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                                <Tooltip
+                                    formatter={currencyFormatter}
+                                    contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
+                                />
+                                <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                <Bar dataKey="Ventas" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+                                <Bar dataKey="Gastos" fill="#f97316" radius={[4, 4, 0, 0]} />
+                                <ReferenceLine y={0} stroke="#000" strokeDasharray="3 3" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Chart 2: Dept % of Total General Billing */}
+                    <div className="bg-white rounded-xl border p-5 shadow-sm">
+                        <h3 className="text-sm font-bold text-gray-800 mb-4">📈 % Facturación de {deptLabel} vs Total General</h3>
+                        <ResponsiveContainer width="100%" height={280}>
+                            <AreaChart data={deptPctData}>
+                                <defs>
+                                    <linearGradient id="billingGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                                        <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                                <YAxis tick={{ fontSize: 11 }} unit="%" domain={[0, 'auto']} />
+                                <Tooltip
+                                    formatter={(v: number) => `${v.toFixed(1)}%`}
+                                    contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
+                                />
+                                <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                <Area type="monotone" dataKey={`${deptLabel} %`} stroke="#8b5cf6" fill="url(#billingGrad)" strokeWidth={2} />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    {/* Chart 3: Expense Trend Line */}
+                    <div className="bg-white rounded-xl border p-5 shadow-sm lg:col-span-2">
+                        <h3 className="text-sm font-bold text-gray-800 mb-4">📉 Tendencia de Gastos por Categoría</h3>
+                        <ResponsiveContainer width="100%" height={300}>
+                            <LineChart data={expenseTrendData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} />
+                                <Tooltip
+                                    formatter={currencyFormatter}
+                                    contentStyle={{ borderRadius: '8px', fontSize: '12px', border: '1px solid #e5e7eb' }}
+                                />
+                                <Legend wrapperStyle={{ fontSize: '12px' }} />
+                                {catMonthly.map((cat, idx) => (
+                                    <Line
+                                        key={cat.label}
+                                        type="monotone"
+                                        dataKey={cat.label}
+                                        stroke={expColors[idx % expColors.length]}
+                                        strokeWidth={1.5}
+                                        dot={{ r: 3 }}
+                                        activeDot={{ r: 5 }}
+                                    />
+                                ))}
+                                <Line type="monotone" dataKey="Group %" stroke="#6366f1" strokeWidth={1.5} dot={{ r: 3 }} />
+                                <Line type="monotone" dataKey="Total" stroke="#1e293b" strokeWidth={2.5} strokeDasharray="6 3" dot={{ r: 4 }} />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    // --- Calculate totals for Real/Presupuesto view ---
+    const ingresosTotals = calculateSectionTotal('revenue', deptRevenue);
+    const ingresosAnual = ingresosTotals.reduce((a, b) => a + b, 0);
+
+    const gastosTotals = Array(12).fill(0);
+    expCats.forEach(cat => {
+        const totals = calculateSectionTotal(cat.key, cat.items);
+        totals.forEach((v, i) => gastosTotals[i] += v);
+    });
+    const gastosAnual = gastosTotals.reduce((a, b) => a + b, 0);
+
+    const ebitdaTotals = ingresosTotals.map((v, i) => v - gastosTotals[i]);
+    const ebitdaAnual = ingresosAnual - gastosAnual;
+
+    // --- Header (shared across all tabs) ---
+    const renderHeader = (title: string) => (
+        <div className="bg-white border-b px-6 py-3 flex items-center justify-between sticky top-0 z-20">
+            <div className="flex items-center gap-4">
+                <h1 className="text-lg font-bold text-gray-900">
+                    {title}
+                </h1>
+                <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
+                    {TABS.map(tab => (
+                        <Button
+                            key={tab}
+                            variant={activeTab === tab ? 'default' : 'ghost'}
+                            size="sm"
+                            onClick={() => setActiveTab(tab)}
+                            className="text-xs h-7 px-3"
+                        >
+                            {tab}
+                        </Button>
+                    ))}
+                </div>
+            </div>
+            <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setYear(year - 1)}>
+                    ← {year - 1}
+                </Button>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setYear(year + 1)}>
+                    {year + 1} →
+                </Button>
+                {activeTab !== 'Dashboard' && (
+                    <Button size="sm" className="gap-1 ml-2 h-7 text-xs">
+                        <Download size={12} />
+                        Exportar
+                    </Button>
+                )}
+            </div>
+        </div>
+    );
+
+    // --- DASHBOARD TAB ---
+    if (activeTab === 'Dashboard') {
+        return (
+            <div className="space-y-4 -mx-6 -mt-6">
+                {renderHeader(`${deptLabel.toUpperCase()} — DASHBOARD ${year}`)}
+                {renderDashboardTab()}
+                {isLoading && (
+                    <div className="fixed inset-0 bg-white/50 flex items-center justify-center z-50">
+                        <div className="bg-white rounded-lg shadow-lg p-4">Cargando...</div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+
+    // --- COMPARACIÓN TAB ---
+    if (activeTab === 'Comparación') {
+        return (
+            <div className="space-y-4 -mx-6 -mt-6">
+                {renderHeader(`P&L ${deptLabel.toUpperCase()} — COMPARACIÓN ${year}`)}
+                {renderComparisonTable()}
+            </div>
+        );
+    }
+
+    // --- REAL / PRESUPUESTO TAB ---
+    return (
+        <div className="space-y-4 -mx-6 -mt-6">
+            {renderHeader(`P&L ${deptLabel.toUpperCase()} — ${activeTab === 'Real' ? 'REAL' : 'PRESUPUESTO'} ${year}`)}
+
+            {/* Spreadsheet (read-only) */}
+            <div className="overflow-x-auto px-2">
+                <table className="w-full border-collapse text-xs" style={{ minWidth: '1200px' }}>
+                    <thead>
+                        <tr className="bg-white">
+                            <th className="border border-gray-300 px-2 py-2 text-left font-medium" style={{ width: '100px' }}></th>
+                            <th className="border border-gray-300 px-2 py-2 text-left font-medium" style={{ width: '160px' }}></th>
+                            {MONTHS.map((month, i) => (
+                                <th key={i} className="border border-gray-300 px-1 py-2 text-center font-medium text-xs" style={{ width: '70px', minWidth: '70px' }}>
+                                    {month}
+                                </th>
+                            ))}
+                            <th className="border border-gray-300 px-1 py-2 text-center font-semibold text-xs bg-gray-100" style={{ width: '80px', minWidth: '80px' }}>
+                                Anual
+                            </th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {/* INGRESOS DE EXPLOTACIÓN */}
+                        <tr className="bg-purple-100">
+                            <td colSpan={2} className="border border-purple-300 px-2 py-1.5 font-bold text-purple-900 text-xs">
+                                INGRESOS DE EXPLOTACIÓN
+                            </td>
+                            {ingresosTotals.map((val, i) => (
+                                <td key={i} className="border border-purple-300 px-1 py-1.5 text-right font-semibold text-purple-800 tabular-nums">
+                                    {fmtDisplay(val)}
+                                </td>
+                            ))}
+                            <td className="border border-purple-300 px-1 py-1.5 text-right font-bold text-purple-900 tabular-nums">
+                                {fmtDisplay(ingresosAnual)}
+                            </td>
+                        </tr>
+
+                        {renderRevenueRows()}
+
+                        {/* Spacer */}
+                        <tr><td colSpan={15} className="py-2 bg-white border-0"></td></tr>
+
+                        {/* GASTOS DE EXPLOTACIÓN */}
+                        <tr className="bg-orange-100">
+                            <td colSpan={2} className="border border-orange-300 px-2 py-1.5 font-bold text-orange-900 text-xs">
+                                GASTOS DE EXPLOTACIÓN
+                            </td>
+                            {gastosTotals.map((val, i) => (
+                                <td key={i} className="border border-orange-300 px-1 py-1.5 text-right font-semibold text-orange-800 tabular-nums">
+                                    {fmtDisplay(val)}
+                                </td>
+                            ))}
+                            <td className="border border-orange-300 px-1 py-1.5 text-right font-bold text-orange-900 tabular-nums">
+                                {fmtDisplay(gastosAnual)}
+                            </td>
+                        </tr>
+
+                        {renderExpenseCategory('Gastos de personal', deptPersonal, 'personal')}
+                        {renderExpenseCategory('Comisiones', deptComisiones, 'comisiones')}
+                        {renderExpenseCategory('Marketing', deptMarketing, 'marketing')}
+                        {renderExpenseCategory('Formación', deptFormacion, 'formacion')}
+                        {renderExpenseCategory('Software', deptSoftware, 'software')}
+                        {renderExpenseCategory('Adspent', deptAdspent, 'adspent')}
+                        {renderExpenseCategory('Gastos Operativos', deptGastosOp, 'gastosOp')}
+
+                        {/* EBITDA */}
+                        <tr className="bg-blue-100">
+                            <td colSpan={2} className="border border-blue-300 px-2 py-2 font-bold text-blue-900 text-sm">
+                                EBITDA
+                            </td>
+                            {ebitdaTotals.map((val, i) => (
+                                <td key={i} className="border border-blue-300 px-1 py-2 text-right font-bold text-blue-800 tabular-nums">
+                                    {fmtDisplay(val)}
+                                </td>
+                            ))}
+                            <td className="border border-blue-300 px-1 py-2 text-right font-bold text-blue-900 text-sm tabular-nums">
+                                {fmtDisplay(ebitdaAnual)}
+                            </td>
+                        </tr>
+
+                        {/* RESULTADO */}
+                        <tr className="bg-green-100">
+                            <td colSpan={2} className="border border-green-400 px-2 py-2 font-bold text-green-900 text-sm">
+                                RESULTADO
+                            </td>
+                            {ebitdaTotals.map((val, i) => (
+                                <td key={i} className={`border border-green-400 px-1 py-2 text-right font-bold tabular-nums ${val >= 0 ? 'text-green-800' : 'text-red-600'}`}>
+                                    {fmtDisplay(val)}
+                                </td>
+                            ))}
+                            <td className={`border border-green-400 px-1 py-2 text-right font-bold text-sm tabular-nums ${ebitdaAnual >= 0 ? 'text-green-900' : 'text-red-600'}`}>
+                                {fmtDisplay(ebitdaAnual)}
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            {isLoading && (
+                <div className="fixed inset-0 bg-white/50 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-lg shadow-lg p-4">Cargando...</div>
+                </div>
+            )}
+        </div>
+    );
+}

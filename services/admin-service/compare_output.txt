@@ -1,0 +1,21 @@
+﻿Angela Navarro            | fee_paid=  1947 | detail=  N/A  | Immoral      | MISSING DETAIL
+Bobo Choses               | fee_paid=    84 | detail=  N/A  | Imfashion    | MISSING DETAIL
+Carrer                    | fee_paid=   600 | detail=   600 | Imfashion    | OK
+Delhi Chores              | fee_paid=   700 | detail=  N/A  | Imfilms      | MISSING DETAIL
+Embilco                   | fee_paid=   700 | detail=   700 | Immoral      | OK
+Opcion Capital            | fee_paid=   255 | detail=   255 | Immoral      | OK
+Prueba                    | fee_paid=   700 | detail=  N/A  | Imfilms      | MISSING DETAIL
+the Connector             | fee_paid=   700 | detail=   700 | Imfilms      | OK
+Velites                   | fee_paid= 12000 | detail= 12000 | Immoral      | OK
+Vertigo                   | fee_paid=   500 | detail=   500 | Imfilms      | OK
+
+--- TOTALS ---
+Total fee_paid (what Matrix shows): 18186
+Total billing_details PAID_MEDIA_STRATEGY: 14755
+Difference (missing from details): 3431
+
+--- MISSING CLIENTS (have fee_paid but no billing_detail) ---
+  Angela Navarro: fee_paid=1947 (mb_id: 2eb09c4a-4901-432b-98a0-f76804560582)
+  Bobo Choses: fee_paid=84 (mb_id: ca8544b8-dd9f-4b59-b5ee-94aab1a8f877)
+  Delhi Chores: fee_paid=700 (mb_id: ecc78c7a-a967-4501-a9c1-9285bff7c0c0)
+  Prueba: fee_paid=700 (mb_id: e3dc4c5e-c226-4330-b591-a60d857d7b62)

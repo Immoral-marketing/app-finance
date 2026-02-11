@@ -1,0 +1,896 @@
+import express from 'express';
+import Joi from 'joi';
+import supabase from '../config/supabase.js';
+
+const router = express.Router();
+
+// ================================================
+// BILLING MATRIX ENDPOINTS
+// ================================================
+
+/**
+ * GET /matrix
+ * Get all billing data structured for the spreadsheet view (Pivot)
+ */
+router.get('/matrix', async (req, res) => {
+    try {
+        const { year, month } = req.query;
+
+        if (!year || !month) return res.status(400).json({ error: 'Year and month required' });
+
+        console.log(`Fetching matrix for ${year}-${month}`);
+
+        // 1. Fetch all active clients
+        // Removed separate contracts join to avoid schema cache issues if relationship is missing
+        const { data: clients, error: clientError } = await supabase
+            .from('clients')
+            .select(`
+                id,
+                name,
+                vertical_id,
+                fee_config,
+                vertical:verticals(code, name)
+            `)
+            .eq('is_active', true)
+            .order('name');
+
+        if (clientError) throw clientError;
+
+        // 1b. Fetch Contracts separately (for Vencimiento)
+        const clientIds = clients.map(c => c.id);
+        const { data: contracts, error: contractError } = await supabase
+            .from('contracts')
+            .select('client_id, effective_to')
+            .in('client_id', clientIds)
+            .eq('is_active', true);
+
+        const contractsMap = {};
+        // If contracts table doesn't exist or errors, we just ignore it for now to not break the page
+        if (!contractError && contracts) {
+            contracts.forEach(c => {
+                // If multiple, just take the first one found or latest
+                contractsMap[c.client_id] = c;
+            });
+        } else if (contractError) {
+            console.warn("Could not fetch contracts:", contractError.message);
+        }
+
+        // 2. Fetch all services ordered by department display_order, then service display_order
+        const { data: services, error: serviceError } = await supabase
+            .from('services')
+            .select(`
+                id, code, name, department_id, display_order,
+                department:departments(id, code, name, display_order)
+            `)
+            .order('display_order', { ascending: true })
+            .order('display_order', { foreignTable: 'departments', ascending: true });
+
+        if (serviceError) throw serviceError;
+
+        // JS Sort (Department Order -> Service Order)
+        services.sort((a, b) => {
+            const deptOrderA = a.department?.display_order || 99;
+            const deptOrderB = b.department?.display_order || 99;
+            if (deptOrderA !== deptOrderB) return deptOrderA - deptOrderB;
+            return a.display_order - b.display_order;
+        });
+
+        // 3. Fetch Monthly Billing
+        const { data: billingRecords, error: billingError } = await supabase
+            .from('monthly_billing')
+            .select('*')
+            .eq('fiscal_year', year)
+            .eq('fiscal_month', month);
+
+        if (billingError) throw billingError;
+
+        // 4. Fetch Billing Details
+        const billingIds = billingRecords.map(b => b.id);
+        let details = [];
+        if (billingIds.length > 0) {
+            const { data: d, error: dError } = await supabase
+                .from('billing_details')
+                .select('*')
+                .in('monthly_billing_id', billingIds);
+            if (dError) throw dError;
+            details = d;
+        }
+
+        // 5. Sync with Actuals (Ad Investment)
+        // Use 'client_ad_investment' table to get Real Data
+        const { data: actuals } = await supabase
+            .from('client_ad_investment')
+            .select('client_id, platform_id, actual_amount')
+            .eq('fiscal_year', year)
+            .eq('fiscal_month', month);
+
+        const actualsMap = {};
+        if (actuals) {
+            actuals.forEach(a => {
+                const amt = Number(a.actual_amount || 0);
+                if (!actualsMap[a.client_id]) {
+                    actualsMap[a.client_id] = { total_spend: 0, platforms: new Set() };
+                }
+                actualsMap[a.client_id].total_spend += amt;
+                if (amt > 0) {
+                    actualsMap[a.client_id].platforms.add(a.platform_id);
+                }
+            });
+        }
+
+        // Pre-fetch Strategy Service (for optimization)
+        const stratService = services.find(s => s.code === 'PAID_MEDIA_STRATEGY');
+
+        const billingUpserts = []; // Changed to Upserts (Full Rows)
+        const detailUpserts = [];
+
+        // Iterate Billing Records and Sync
+        for (const r of billingRecords) {
+            const actual = actualsMap[r.client_id];
+            const realInvestment = actual ? actual.total_spend : 0;
+            const realCount = actual ? actual.platforms.size : 0;
+
+            const updates = {};
+            let currentInv = Number(r.total_actual_investment || 0);
+            let currentCount = Number(r.platform_count || 1);
+
+            // 1. Sync Investment (Actuals)
+            if (currentInv !== realInvestment) {
+                updates.total_actual_investment = realInvestment;
+                currentInv = realInvestment;
+                r.total_actual_investment = realInvestment;
+            }
+
+            // 2. Sync Platform Count
+            if (actual) {
+                const newCount = realCount > 0 ? realCount : 1;
+                if (currentCount !== newCount) {
+                    updates.platform_count = newCount;
+                    currentCount = newCount;
+                    r.platform_count = newCount;
+                }
+            }
+
+            // 3. FORCE Calculate Fee (Ignora Manual Override para reactivar cálculo)
+            let feeToStore = r.fee_paid;
+
+            const clientObj = clients.find(c => c.id === r.client_id);
+            if (clientObj && clientObj.fee_config) {
+                const config = clientObj.fee_config;
+                let pct = 0;
+
+                // Verify Config Type - Type Safe
+                if (config.fee_type === 'variable') {
+                    if (config.variable_ranges && config.variable_ranges.length > 0) {
+                        const range = config.variable_ranges.find(rg => {
+                            const min = Number(rg.min || 0);
+                            const max = (rg.max === null || rg.max === undefined) ? Infinity : Number(rg.max);
+                            return currentInv >= min && currentInv <= max;
+                        });
+                        pct = range ? Number(range.pct) : 0;
+                    } else {
+                        pct = 0;
+                    }
+                } else {
+                    pct = Number(config.fixed_pct || 0);
+                }
+
+                // Platform Costs - Type Safe
+                const usePlat = config.use_platform_costs === true;
+                // Ensure count is at least 1 for calculation IF it should apply
+                // LOGIC CHANGE: Only apply platform costs if there is actual investment OR manual count > 0
+                const shouldApplyPlatformCost = currentInv > 0 || currentCount > 1; // >1 because default is often 1 via defaults
+
+                let pCost = 0;
+                if (usePlat && shouldApplyPlatformCost) {
+                    const calcCount = Math.max(1, currentCount);
+                    pCost = (Number(config.platform_cost_first || 0) + (calcCount - 1) * Number(config.platform_cost_additional || 0));
+                }
+
+                // Calculate Raw Fee
+                const rawFee = (currentInv * (pct / 100)) + pCost;
+                const newFee = Math.round(rawFee);
+                const pCostRounded = Math.round(pCost);
+
+                // Check for changes (Always update metadata)
+                if (Math.abs((r.applied_fee_percentage || 0) - pct) > 0.001) {
+                    updates.applied_fee_percentage = pct;
+                    r.applied_fee_percentage = pct;
+                }
+                if (Math.abs((r.platform_costs || 0) - pCostRounded) > 0.001) {
+                    updates.platform_costs = pCostRounded;
+                    r.platform_costs = pCostRounded;
+                }
+
+                // FEE LOGIC: Respect Manual Override
+                if (r.is_manual_override) {
+                    // User manually set the fee, do NOT overwrite it with calculation
+                    // But ensure we store the manual value if not present?
+                    // Just keep existing r.fee_paid
+                    feeToStore = Math.round(r.fee_paid || 0);
+                } else {
+                    // Auto-Calculate
+                    if (Math.abs((r.fee_paid || 0) - newFee) > 0.01) {
+                        updates.fee_paid = newFee;
+                        r.fee_paid = newFee;
+                        feeToStore = newFee;
+                    } else {
+                        feeToStore = newFee;
+                    }
+                }
+            }
+
+            // Collect Upserts (Sanitize object)
+            if (Object.keys(updates).length > 0) {
+                // We must use the FULL record for upsert to ensure we don't lose data?
+                // Actually, if we use the object 'r' which comes from 'select *', it has all columns.
+                // We just need to remove the joined 'client' property.
+                const { client, ...cleanRecord } = r;
+                billingUpserts.push(cleanRecord);
+            }
+
+            // Collect Detail Upserts (Sync Strategy Column)
+            if (stratService && typeof feeToStore === 'number' && !isNaN(feeToStore)) {
+                detailUpserts.push({
+                    monthly_billing_id: r.id,
+                    service_id: stratService.id,
+                    department_id: stratService.department_id,
+                    service_name: stratService.name,
+                    amount: feeToStore // Already Rounded
+                });
+            }
+        }
+
+        // BATCH EXECUTION
+        if (billingUpserts.length > 0) {
+            // SINGLE Bulk Upsert Request
+            await supabase.from('monthly_billing').upsert(billingUpserts);
+        }
+
+        if (detailUpserts.length > 0) {
+            // Bulk Upsert Details
+            await supabase.from('billing_details').upsert(detailUpserts, { onConflict: 'monthly_billing_id, service_id' });
+
+            // Update in-memory 'details' for immediate response
+            detailUpserts.forEach(up => {
+                const existingIdx = details.findIndex(d => d.monthly_billing_id === up.monthly_billing_id && d.service_id === up.service_id);
+                if (existingIdx >= 0) {
+                    details[existingIdx].amount = up.amount;
+                } else {
+                    details.push(up);
+                }
+            });
+        }
+
+        // 6. Structure Data
+        const matrix = clients.map(client => {
+            const billing = billingRecords.find(b => b.client_id === client.id) || null;
+            const clientDetails = billing ? details.filter(d => d.monthly_billing_id === billing.id) : [];
+
+            // Get Vencimiento (Contract End or 'DD' if default)
+            // Use the map we built
+            const contract = contractsMap[client.id];
+            // Calculate numeric day if needed, or just date string
+            const vencimiento = contract?.effective_to ? new Date(contract.effective_to).getDate() : 15; // Default 15th if missing
+
+            // Map services
+            const serviceValues = {};
+            services.forEach(svc => {
+                const detail = clientDetails.find(d => d.service_id === svc.id);
+                serviceValues[svc.id] = detail ? detail.amount : 0;
+            });
+
+            return {
+                client_id: client.id,
+                client_name: client.name,
+                vertical: client.vertical?.name || 'Grand', // Default vertical
+                vencimiento: vencimiento,
+                fee_config: client.fee_config,
+                billing_id: billing?.id || null,
+                metadata: {
+                    // Show ACTUAL Investment in Matrix (from new column or sync)
+                    investment: billing?.total_actual_investment || 0,
+                    // Pass Planned for reference if needed
+                    planned_investment: billing?.total_ad_investment || 0,
+
+                    fee_pct: billing?.applied_fee_percentage || 0,
+                    platform_count: billing?.platform_count || 1,
+                    platform_costs: billing?.platform_costs || 0,
+                    fee_min: 0,
+                    fee_paid: billing?.fee_paid || 0,
+                    immedia_total: billing?.immedia_total || 0,
+                    imcontent_total: billing?.imcontent_total || 0,
+                    immoralia_total: billing?.immoralia_total || 0,
+                    immoral_total: billing?.immoral_general_total || 0,
+                    grand_total: billing?.grand_total || 0
+                },
+                services: serviceValues
+            };
+        });
+
+        res.json({
+            year,
+            month,
+            columns: services,
+            rows: matrix
+        });
+
+    } catch (err) {
+        console.error('Matrix Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * POST /matrix/save
+ * Update a specific cell (Service Amount or Metadata)
+ */
+router.post('/matrix/save', async (req, res) => {
+    try {
+        const { year, month, client_id, field, value, service_id } = req.body;
+
+        console.log(`Saving matrix cell: ${field} = ${value} for Client ${client_id}`);
+
+        // 1. Get or Create Monthly Billing Record
+        let { data: billing, error: getError } = await supabase
+            .from('monthly_billing')
+            .select('id, total_ad_investment, applied_fee_percentage, platform_count, platform_costs')
+            .eq('client_id', client_id)
+            .eq('fiscal_year', year)
+            .eq('fiscal_month', month)
+            .single();
+
+        if (getError && getError.code === 'PGRST116') {
+            // Create if missing
+            const { data: newBilling, error: createError } = await supabase
+                .from('monthly_billing')
+                .insert({
+                    client_id,
+                    fiscal_year: year,
+                    fiscal_month: month,
+                    total_ad_investment: 0,
+                    applied_fee_percentage: 10,
+                    platform_count: 1
+                })
+                .select()
+                .single();
+
+            if (createError) throw createError;
+            billing = newBilling;
+        } else if (getError) {
+            throw getError;
+        }
+
+        // 2. Handle Update Logic
+        if (field === 'vencimiento') {
+            // Update Contract (or create one if missing?)
+            // For now, let's assuming updating the active contract's effective_to date (Day only? or Full Date?)
+            // User likely edits the DAY of the month.
+            // Let's assume input is just a number [1-31]. 
+            // We need to fetch the contract first.
+            const { data: contracts } = await supabase
+                .from('contracts')
+                .select('id, effective_to')
+                .eq('client_id', client_id)
+                .eq('is_active', true)
+                .order('created_at', { ascending: false })
+                .limit(1);
+
+            if (contracts && contracts.length > 0) {
+                const contract = contracts[0];
+                let newDate = new Date(contract.effective_to || new Date());
+                newDate.setDate(parseInt(value)); // Set day
+
+                await supabase
+                    .from('contracts')
+                    .update({ effective_to: newDate.toISOString() })
+                    .eq('id', contract.id);
+            } else {
+                // No active contract logic? Ignore for now or create?
+                console.warn(`No active contract for client ${client_id} to update vencimiento`);
+            }
+
+        } else if (field === 'vertical') {
+            // Update Client Vertical
+            // Value should be vertical Code or Name? Frontend should send ID preferably, or we look it up.
+            // Assuming frontend sends the Vertical Name/Code string for now based on previous UI?
+            // Actually, let's expect the ID if possible, or lookup by code.
+            // If value is a string "Content", look up ID.
+
+            const { data: vert } = await supabase
+                .from('verticals')
+                .select('id')
+                .ilike('name', value) // loose match
+                .single();
+
+            if (vert) {
+                await supabase
+                    .from('clients')
+                    .update({ vertical_id: vert.id })
+                    .eq('id', client_id);
+            }
+
+        } else if (field === 'service_amount') {
+            if (!service_id) throw new Error('Service ID required for service amount update');
+
+            // Check Department for this service
+            const { data: service } = await supabase.from('services').select('department_id, name').eq('id', service_id).single();
+            if (!service) throw new Error('Service not found');
+
+            // Handle Manual Override Logic
+            // If checking PAID_MEDIA_STRATEGY
+            const { data: stratService } = await supabase
+                .from('services')
+                .select('id')
+                .eq('code', 'PAID_MEDIA_STRATEGY')
+                .maybeSingle();
+
+            if (stratService && stratService.id === service_id) {
+                console.log('User manually editing Strategy Service -> Enabling Override');
+                // Set is_manual_override = true
+                await supabase
+                    .from('monthly_billing')
+                    .update({
+                        is_manual_override: true,
+                        fee_paid: parseFloat(value) // Sync fee_paid
+                    })
+                    .eq('id', billing.id);
+            }
+
+            // Upsert Detail
+            const { data: existingDetail } = await supabase
+                .from('billing_details')
+                .select('id')
+                .eq('monthly_billing_id', billing.id)
+                .eq('service_id', service_id)
+                .single();
+
+            // If value is empty, null, or zero, DELETE the record
+            const numValue = parseFloat(value);
+            const isEmpty = !value || value === '' || numValue === 0 || isNaN(numValue);
+
+            if (isEmpty && existingDetail) {
+                // Delete the record if it exists and value is empty
+                await supabase.from('billing_details').delete().eq('id', existingDetail.id);
+            } else if (!isEmpty) {
+                // Only update/insert if value is not empty
+                if (existingDetail) {
+                    await supabase.from('billing_details').update({ amount: numValue }).eq('id', existingDetail.id);
+                } else {
+                    await supabase.from('billing_details').insert({
+                        monthly_billing_id: billing.id,
+                        department_id: service.department_id,
+                        service_id: service_id,
+                        service_name: service.name,
+                        amount: numValue
+                    });
+                }
+            }
+            // If isEmpty and no existingDetail, do nothing (no record to delete)
+        } else {
+            // Metadata Update
+            const updateData = {};
+            // If user edits 'investment' in Matrix, we update 'total_actual_investment' (Manual Override of Actuals)
+            // We DO NOT update 'total_ad_investment' (Planned)
+            if (field === 'investment') updateData.total_actual_investment = value;
+            if (field === 'fee_pct') updateData.applied_fee_percentage = value;
+            if (field === 'platform_count') updateData.platform_count = value;
+
+            if (['investment', 'fee_pct', 'platform_count'].includes(field)) {
+                // Fetch client fee_config
+                const { data: clientData } = await supabase
+                    .from('clients')
+                    .select('fee_config')
+                    .eq('id', client_id)
+                    .single();
+
+                const feeConfig = clientData?.fee_config || {
+                    fee_type: 'fixed',
+                    fixed_pct: 10,
+                    platform_cost_first: 700,
+                    platform_cost_additional: 300
+                };
+
+                // Use the NEW value if being edited, else fallback to DB value
+                // For Investment: Use what's being edited or the existing Actual Investment
+                // NOTE: We should read 'total_actual_investment' from DB if not editing it.
+                // But 'billing' object (fetched above) might have old value (needs to be fetched with new column in select)
+                // We'll trust 'billing' has ALL columns (*)
+                const inv = field === 'investment' ? parseFloat(value) : (billing.total_actual_investment || 0);
+                const count = field === 'platform_count' ? parseInt(value) : (billing.platform_count || 1);
+
+                // Calculate fee percentage (fixed or variable)
+                // Determine Fee %
+                let feePct = 0;
+                if (field === 'fee_pct') {
+                    feePct = parseFloat(value);
+                } else if (feeConfig.fee_type === 'variable') {
+                    if (feeConfig.variable_ranges?.length > 0) {
+                        const range = feeConfig.variable_ranges.find(r => {
+                            const min = Number(r.min || 0);
+                            const max = (r.max === null || r.max === undefined) ? Infinity : Number(r.max);
+                            return inv >= min && inv <= max;
+                        });
+                        feePct = range ? Number(range.pct) : 0;
+                    }
+                } else {
+                    feePct = billing.applied_fee_percentage || Number(feeConfig.fixed_pct || 0);
+                }
+
+                // Platform Cost
+                const usePlatformCosts = feeConfig.use_platform_costs === true;
+
+                // LOGIC CHANGE: Only apply platform costs if Investment > 0 OR explicit count > 1
+                // We trust the 'inv' variable here (which is either DB value or manually edited value)
+                const shouldApply = inv > 0 || count > 1;
+
+                let platformCost = 0;
+                if (usePlatformCosts && shouldApply) {
+                    const calcCount = Math.max(1, count);
+                    platformCost = (Number(feeConfig.platform_cost_first) || 0) + ((calcCount - 1) * (Number(feeConfig.platform_cost_additional) || 0));
+                }
+
+                const computedFee = (inv * (feePct / 100)) + platformCost;
+
+                updateData.platform_costs = Math.round(platformCost);
+                updateData.fee_paid = Math.round(computedFee);
+                updateData.applied_fee_percentage = feePct;
+
+                // Sync Strategy Service Detail
+                const { data: stratService } = await supabase
+                    .from('services')
+                    .select('id, department_id, name')
+                    .eq('code', 'PAID_MEDIA_STRATEGY')
+                    .maybeSingle();
+
+                if (stratService) {
+                    await supabase.from('billing_details').upsert({
+                        monthly_billing_id: billing.id,
+                        service_id: stratService.id,
+                        department_id: stratService.department_id,
+                        service_name: stratService.name,
+                        amount: computedFee
+                    }, { onConflict: 'monthly_billing_id, service_id' });
+                }
+            }
+
+            if (Object.keys(updateData).length > 0) {
+                // If user edits investment/fee manually, enable Override
+                if (field === 'investment' || field === 'fee_pct') {
+                    updateData.is_manual_override = true;
+                }
+
+                await supabase.from('monthly_billing').update(updateData).eq('id', billing.id);
+            }
+        }
+
+        res.json({ success: true });
+
+    } catch (err) {
+        console.error('Save Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * GET /billing
+ * Get all billing records for a year/month
+ */
+router.get('/', async (req, res) => {
+    try {
+        const { year, month } = req.query;
+
+        console.log('Fetching billing matrix for', year, month);
+
+        if (!year || !month) {
+            return res.status(400).json({ error: 'Year and month are required' });
+        }
+
+        const { data: billing_records, error } = await supabase
+            .from('monthly_billing')
+            .select(`
+                *,
+                client:clients(name)
+            `)
+            .eq('fiscal_year', parseInt(year))
+            .eq('fiscal_month', parseInt(month))
+            .order('client_name');
+
+        if (error) {
+            console.error('Error fetching billing list:', error);
+            return res.status(500).json({ error: 'Failed to fetch billing list' });
+        }
+
+        res.json({
+            success: true,
+            billing_records
+        });
+
+    } catch (err) {
+        console.error('Error in billing list:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /billing/calculate
+ * Calculate suggested billing for a client/period
+ * Returns suggestions but DOES NOT save automatically
+ */
+router.post('/calculate', async (req, res) => {
+    try {
+        const schema = Joi.object({
+            client_id: Joi.string().uuid().required(),
+            fiscal_year: Joi.number().integer().min(2020).required(),
+            fiscal_month: Joi.number().integer().min(1).max(12).required(),
+            save: Joi.boolean().default(false) // Explicit save flag
+        });
+
+        const { error, value } = schema.validate(req.body);
+        if (error) {
+            return res.status(400).json({ error: error.details[0].message });
+        }
+
+        const { client_id, fiscal_year, fiscal_month, save } = value;
+
+        // Call SQL function (dry_run = !save)
+        const { data, error: calcError } = await supabase.rpc(
+            'calculate_monthly_billing',
+            {
+                p_client_id: client_id,
+                p_fiscal_year: fiscal_year,
+                p_fiscal_month: fiscal_month,
+                p_dry_run: !save
+            }
+        );
+
+        if (calcError) {
+            console.error('Calculation error:', calcError);
+            return res.status(500).json({ error: 'Failed to calculate billing', details: calcError.message });
+        }
+
+        res.json({
+            success: true,
+            saved: save,
+            message: save ? 'Billing calculated and saved' : 'Billing calculated (not saved - preview only)',
+            calculation: data[0],
+            note: 'All values are editable. Use PATCH /billing/:id to modify.'
+        });
+
+    } catch (err) {
+        console.error('Error in billing calculation:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * GET /billing/:client_id/:year/:month
+ * Get billing details for a client/period
+ */
+router.get('/:client_id/:year/:month', async (req, res) => {
+    try {
+        const { client_id, year, month } = req.params;
+
+        // Get monthly billing
+        const { data: billing, error: billingError } = await supabase
+            .from('monthly_billing')
+            .select(`
+        *,
+        client:clients(name, legal_name),
+        details:billing_details(
+          *,
+          department:departments(name, code),
+          service:services(name, code)
+        )
+      `)
+            .eq('client_id', client_id)
+            .eq('fiscal_year', parseInt(year))
+            .eq('fiscal_month', parseInt(month))
+            .single();
+
+        if (billingError && billingError.code !== 'PGRST116') {
+            return res.status(500).json({ error: 'Failed to fetch billing', details: billingError.message });
+        }
+
+        if (!billing) {
+            return res.status(404).json({ error: 'Billing not found for this period' });
+        }
+
+        res.json({
+            success: true,
+            billing,
+            editable: !billing.is_finalized,
+            note: 'Use PATCH /billing/:id to modify values manually'
+        });
+
+    } catch (err) {
+        console.error('Error fetching billing:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * PATCH /billing/:id
+ * Manually edit billing values (FULL EXCEL-LIKE FLEXIBILITY)
+ */
+router.patch('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const schema = Joi.object({
+            applied_fee_percentage: Joi.number().min(0).max(100),
+            platform_costs: Joi.number().min(0),
+            fee_paid: Joi.number().min(0),
+            immedia_total: Joi.number().min(0),
+            imcontent_total: Joi.number().min(0),
+            immoralia_total: Joi.number().min(0),
+            immoral_general_total: Joi.number().min(0),
+            notes: Joi.string().allow(''),
+            is_finalized: Joi.boolean()
+        }).min(1); // At least one field required
+
+        const { error, value } = schema.validate(req.body);
+        if (error) {
+            return res.status(400).json({ error: error.details[0].message });
+        }
+
+        // Check if period is closed
+        const { data: billing } = await supabase
+            .from('monthly_billing')
+            .select('fiscal_year, fiscal_month')
+            .eq('id', id)
+            .single();
+
+        if (billing) {
+            const { data: period } = await supabase.rpc('is_period_closed', {
+                p_fiscal_year: billing.fiscal_year,
+                p_fiscal_month: billing.fiscal_month
+            });
+
+            if (period) {
+                return res.status(403).json({
+                    error: 'Cannot edit billing for closed period',
+                    note: 'Admin must reopen period first'
+                });
+            }
+        }
+
+        // Update billing
+        const { data, error: updateError } = await supabase
+            .from('monthly_billing')
+            .update(value)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (updateError) {
+            return res.status(500).json({ error: 'Failed to update billing', details: updateError.message });
+        }
+
+        res.json({
+            success: true,
+            message: 'Billing updated successfully',
+            billing: data,
+            note: 'Values updated manually as requested'
+        });
+
+    } catch (err) {
+        console.error('Error updating billing:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /billing/details
+ * Add/edit individual service line items (like Excel rows)
+ */
+router.post('/details', async (req, res) => {
+    try {
+        const schema = Joi.object({
+            monthly_billing_id: Joi.string().uuid().required(),
+            department_id: Joi.string().uuid().required(),
+            service_id: Joi.string().uuid().allow(null),
+            service_name: Joi.string().required(),
+            amount: Joi.number().min(0).required(),
+            is_fee_paid: Joi.boolean().default(false),
+            notes: Joi.string().allow('')
+        });
+
+        const { error, value } = schema.validate(req.body);
+        if (error) {
+            return res.status(400).json({ error: error.details[0].message });
+        }
+
+        const { data, error: insertError } = await supabase
+            .from('billing_details')
+            .insert(value)
+            .select()
+            .single();
+
+        if (insertError) {
+            return res.status(500).json({ error: 'Failed to add billing detail', details: insertError.message });
+        }
+
+        res.json({
+            success: true,
+            message: 'Service line added',
+            detail: data
+        });
+
+    } catch (err) {
+        console.error('Error adding billing detail:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * PATCH /billing/details/:id
+ * Edit individual service line item
+ */
+router.patch('/details/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const schema = Joi.object({
+            service_name: Joi.string(),
+            amount: Joi.number().min(0),
+            notes: Joi.string().allow('')
+        }).min(1);
+
+        const { error, value } = schema.validate(req.body);
+        if (error) {
+            return res.status(400).json({ error: error.details[0].message });
+        }
+
+        const { data, error: updateError } = await supabase
+            .from('billing_details')
+            .update(value)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (updateError) {
+            return res.status(500).json({ error: 'Failed to update detail', details: updateError.message });
+        }
+
+        res.json({
+            success: true,
+            message: 'Service line updated',
+            detail: data
+        });
+
+    } catch (err) {
+        console.error('Error updating detail:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * DELETE /billing/details/:id
+ * Delete service line item
+ */
+router.delete('/details/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const { error: deleteError } = await supabase
+            .from('billing_details')
+            .delete()
+            .eq('id', id);
+
+        if (deleteError) {
+            return res.status(500).json({ error: 'Failed to delete detail', details: deleteError.message });
+        }
+
+        res.json({
+            success: true,
+            message: 'Service line deleted'
+        });
+
+    } catch (err) {
+        console.error('Error deleting detail:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+export default router;

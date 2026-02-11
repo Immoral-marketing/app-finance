@@ -1,0 +1,19 @@
+{
+    "name": "@immoral/shared",
+    "version": "1.0.0",
+    "description": "Shared utilities and config for Immoral Finance microservices",
+    "main": "index.js",
+    "type": "module",
+    "exports": {
+        "./supabase": "./supabase.js",
+        "./ledger": "./ledger.js"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+        "@supabase/supabase-js": "^2.39.3",
+        "dotenv": "^16.4.1",
+        "uuid": "^9.0.1"
+    }
+}

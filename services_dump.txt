@@ -1,0 +1,35 @@
+[AD_SPEND] Ad Spend
+[ADVERTISING] Advertising
+[AGENCY_AUTO] Agency Automation
+[ADVISORY] Asesoria
+[AUDIT] Audit Digital
+[BRAND] Branding
+[BRANDING] Branding
+[BRAND_META] Branding y gestión de campaña de Meta Media
+[BTC] BTC
+[CONSULT_IA] Consultoria con IA
+[CONSULTING_AUTO] Consultoría y automatización de procesos
+[CONTENT_PERF] Creación de contenido de perf
+[CONTENT_DESIGN] Diseño de Contenido
+[FUNNEL] Diseño de embudos
+[DIGITAL_STRATEGY] Estrategia Digital
+[PAID_MEDIA_STRATEGY] Estrategia y Gestión de Campañas de Paid Media
+[MKT_AUTO_EMAIL] Estrategia y Gestión de marketing y email marketing
+[FEE_PAID] Fee Paid
+[AI_CONTENT] Generación de contenido con IA
+[GEN_FANS_IA] Generación servicio de Fans con IA
+[INFLUENCER_UGC] Gestión de Influencers y UGC
+[SOCIAL_MEDIA_MGMT] Gestión de RRSS
+[OTHER_HOURS] Horas/Otros
+[OTHER] Otros servicios
+[CREATIVE] Producción de creatividad
+[SEO] SEO
+[SEO] SEO
+[FANS_MGMT] Servicio gestión de Fans
+[PAID_MEDIA_SETUP] Set-up Inicial
+[IMMORALIA_SETUP] Set-up Inicial IA
+[SETUP] Setup inicial
+[CONTENT_SETUP] Setup Inicial
+[SOCIAL_INIT] Social Initial
+[WEB_DEV] Web dev
+[WEB_DEV] Web Dev
