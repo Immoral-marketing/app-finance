@@ -10,15 +10,11 @@ import {
     Wallet,
     TrendingUp,
     TrendingDown,
-    AlertCircle,
-    Clock,
-    CheckCircle2,
     Settings2
 } from 'lucide-react';
-import { format } from 'date-fns';
 
 // Widget Types
-type WidgetType = 'kpis' | 'departments' | 'recent_activity' | 'upcoming_payments';
+type WidgetType = 'kpis' | 'departments';
 
 // Map department_code from profile to route slug
 const DEPT_ROUTE_MAP: Record<string, string> = {
@@ -222,8 +218,6 @@ export default function Dashboard() {
     const [visibleWidgets, setVisibleWidgets] = useState<Record<WidgetType, boolean>>({
         kpis: true,
         departments: true,
-        recent_activity: true,
-        upcoming_payments: true
     });
     const [isConfiguring, setIsConfiguring] = useState(false);
     const [deptFilter, setDeptFilter] = useState<'all' | 'main' | 'verticals'>('main');
@@ -245,12 +239,6 @@ export default function Dashboard() {
         setVisibleWidgets(newConfig);
         localStorage.setItem('dashboard_config', JSON.stringify(newConfig));
     };
-
-    // Keep dashboard KPIs for non-department data (payments, activity)
-    const { data: dashboardData, isLoading: isLoadingDash } = useQuery({
-        queryKey: ['dashboard', year],
-        queryFn: () => adminApi.getDashboardKPIs(year),
-    });
 
     // Fetch PL matrix (REAL) to compute department cards FROM SAME SOURCE as DepartmentPL
     const { data: plRealData, isLoading: isLoadingPL } = useQuery({
@@ -408,7 +396,7 @@ export default function Dashboard() {
         };
     }, [deptPerformance]);
 
-    const isLoading = isLoadingDash || isLoadingPL;
+    const isLoading = isLoadingPL;
 
     if (isLoading) {
         return (
@@ -419,7 +407,7 @@ export default function Dashboard() {
     }
 
     return (
-        <div className="space-y-8">
+        <div className="space-y-8" >
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
@@ -456,252 +444,160 @@ export default function Dashboard() {
                                     className="rounded border-gray-300"
                                 /> Departments
                             </label>
-                            <label className="flex items-center gap-2 text-sm cursor-pointer hover:text-primary">
-                                <input
-                                    type="checkbox"
-                                    checked={visibleWidgets.recent_activity}
-                                    onChange={() => toggleWidget('recent_activity')}
-                                    className="rounded border-gray-300"
-                                /> Activity
-                            </label>
-                            <label className="flex items-center gap-2 text-sm cursor-pointer hover:text-primary">
-                                <input
-                                    type="checkbox"
-                                    checked={visibleWidgets.upcoming_payments}
-                                    onChange={() => toggleWidget('upcoming_payments')}
-                                    className="rounded border-gray-300"
-                                /> Payments
-                            </label>
                         </div>
                     </CardContent>
                 </Card>
             )}
 
             {/* KPI Cards — from PL matrix */}
-            {visibleWidgets.kpis && (
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                    <Card className="bg-white border-l-4 border-l-primary shadow-sm hover:shadow-md transition-shadow">
-                        <CardContent className="p-6">
-                            <div className="flex items-center justify-between space-y-0 pb-2">
-                                <p className="text-sm font-medium text-muted-foreground">Total Billing (YTD)</p>
-                                <Wallet className="h-4 w-4 text-primary" />
-                            </div>
-                            <div className="flex flex-col mt-2">
-                                <h2 className="text-3xl font-bold">{formatCurrency(plKpis.totalBilling)}</h2>
-                                <p className="text-xs text-muted-foreground mt-1">Gross Revenue</p>
-                            </div>
-                        </CardContent>
-                    </Card>
+            {
+                visibleWidgets.kpis && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                        <Card className="bg-white border-l-4 border-l-primary shadow-sm hover:shadow-md transition-shadow">
+                            <CardContent className="p-6">
+                                <div className="flex items-center justify-between space-y-0 pb-2">
+                                    <p className="text-sm font-medium text-muted-foreground">Total Billing (YTD)</p>
+                                    <Wallet className="h-4 w-4 text-primary" />
+                                </div>
+                                <div className="flex flex-col mt-2">
+                                    <h2 className="text-3xl font-bold">{formatCurrency(plKpis.totalBilling)}</h2>
+                                    <p className="text-xs text-muted-foreground mt-1">Gross Revenue</p>
+                                </div>
+                            </CardContent>
+                        </Card>
 
-                    <Card className="bg-white border-l-4 border-l-red-500 shadow-sm hover:shadow-md transition-shadow">
-                        <CardContent className="p-6">
-                            <div className="flex items-center justify-between space-y-0 pb-2">
-                                <p className="text-sm font-medium text-muted-foreground">Total Expenses (YTD)</p>
-                                <TrendingDown className="h-4 w-4 text-red-500" />
-                            </div>
-                            <div className="flex flex-col mt-2">
-                                <h2 className="text-3xl font-bold">{formatCurrency(plKpis.totalExpenses)}</h2>
-                                <p className="text-xs text-muted-foreground mt-1">Operational Costs</p>
-                            </div>
-                        </CardContent>
-                    </Card>
+                        <Card className="bg-white border-l-4 border-l-red-500 shadow-sm hover:shadow-md transition-shadow">
+                            <CardContent className="p-6">
+                                <div className="flex items-center justify-between space-y-0 pb-2">
+                                    <p className="text-sm font-medium text-muted-foreground">Total Expenses (YTD)</p>
+                                    <TrendingDown className="h-4 w-4 text-red-500" />
+                                </div>
+                                <div className="flex flex-col mt-2">
+                                    <h2 className="text-3xl font-bold">{formatCurrency(plKpis.totalExpenses)}</h2>
+                                    <p className="text-xs text-muted-foreground mt-1">Operational Costs</p>
+                                </div>
+                            </CardContent>
+                        </Card>
 
-                    <Card className="bg-white border-l-4 border-l-green-500 shadow-sm hover:shadow-md transition-shadow">
-                        <CardContent className="p-6">
-                            <div className="flex items-center justify-between space-y-0 pb-2">
-                                <p className="text-sm font-medium text-muted-foreground">Net Margin (YTD)</p>
-                                <TrendingUp className="h-4 w-4 text-green-500" />
-                            </div>
-                            <div className="flex flex-col mt-2">
-                                <h2 className={`text-3xl font-bold ${plKpis.netMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {formatCurrency(plKpis.netMargin)}
-                                </h2>
-                                <p className="text-xs text-muted-foreground mt-1">
-                                    {plKpis.marginPercentage.toFixed(1)}% margin
-                                </p>
-                            </div>
-                        </CardContent>
-                    </Card>
+                        <Card className="bg-white border-l-4 border-l-green-500 shadow-sm hover:shadow-md transition-shadow">
+                            <CardContent className="p-6">
+                                <div className="flex items-center justify-between space-y-0 pb-2">
+                                    <p className="text-sm font-medium text-muted-foreground">Net Margin (YTD)</p>
+                                    <TrendingUp className="h-4 w-4 text-green-500" />
+                                </div>
+                                <div className="flex flex-col mt-2">
+                                    <h2 className={`text-3xl font-bold ${plKpis.netMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {formatCurrency(plKpis.netMargin)}
+                                    </h2>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        {plKpis.marginPercentage.toFixed(1)}% margin
+                                    </p>
+                                </div>
+                            </CardContent>
+                        </Card>
 
-                    <Card className="bg-white border-l-4 border-l-orange-500 shadow-sm hover:shadow-md transition-shadow">
-                        <CardContent className="p-6">
-                            <div className="flex items-center justify-between space-y-0 pb-2">
-                                <p className="text-sm font-medium text-muted-foreground">Pending Payments</p>
-                                <AlertCircle className="h-4 w-4 text-orange-500" />
-                            </div>
-                            <div className="flex flex-col mt-2">
-                                <h2 className="text-3xl font-bold">{dashboardData?.pendingPayments?.length || 0}</h2>
-                                <p className="text-xs text-muted-foreground mt-1">Invoices next 30 days</p>
-                            </div>
-                        </CardContent>
-                    </Card>
-                </div>
-            )}
+                    </div>
+                )
+            }
 
             {/* Department Profitability — from PL matrix */}
-            {visibleWidgets.departments && (
-                <div className="space-y-4 animate-in fade-in slide-in-from-bottom-3 duration-700">
-                    <div className="flex justify-end gap-2">
-                        <Button
-                            variant={deptFilter === 'main' ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => setDeptFilter('main')}
-                        >
-                            Principales
-                        </Button>
-                        <Button
-                            variant={deptFilter === 'verticals' ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => setDeptFilter('verticals')}
-                        >
-                            Verticales
-                        </Button>
-                        <Button
-                            variant={deptFilter === 'all' ? 'default' : 'outline'}
-                            size="sm"
-                            onClick={() => setDeptFilter('all')}
-                        >
-                            Todos
-                        </Button>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {deptPerformance
-                            .filter(dept => {
-                                if (deptFilter === 'all') return true;
-                                if (deptFilter === 'main') return MAIN_DEPTS.includes(dept.name);
-                                if (deptFilter === 'verticals') return VERTICAL_DEPTS.includes(dept.name);
-                                return true;
-                            })
-                            .sort((a, b) => b.income - a.income)
-                            .map(dept => (
-                                <Card key={dept.key} className="hover:shadow-md transition-shadow">
-                                    <CardHeader className="pb-2">
-                                        <CardTitle className="text-base font-bold flex justify-between items-center">
-                                            {dept.name}
-                                            <span className={`text-sm font-normal px-2 py-1 rounded-full ${dept.margin >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                {dept.marginPct.toFixed(1)}% margen
-                                            </span>
-                                        </CardTitle>
-                                    </CardHeader>
-                                    <CardContent>
-                                        <div className="space-y-4">
-                                            {/* Facturación */}
-                                            <div className="flex justify-between items-center border-b pb-2">
-                                                <span className="text-sm font-medium text-gray-500">Facturación</span>
-                                                <span className="text-lg font-bold text-gray-900">{formatCurrency(dept.income)}</span>
-                                            </div>
-
-                                            {/* Expenses Breakdown */}
-                                            <div className="space-y-1 text-sm">
-                                                {dept.categories.map(cat => {
-                                                    const val = dept.breakdown[cat.key] || 0;
-                                                    return (
-                                                        <div key={cat.label} className="flex justify-between text-muted-foreground">
-                                                            <span>{cat.label}</span>
-                                                            <span>{val > 0 ? formatCurrency(val) : '—'}</span>
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-
-                                            {/* Group % */}
-                                            {dept.key !== 'Immoral' && (
-                                                <div className="flex justify-between text-sm text-indigo-600 border-t pt-2">
-                                                    <span className="font-medium">Group % <span className="text-indigo-400 font-normal">({dept.groupPctAnnual}%)</span></span>
-                                                    <span className="font-medium">{dept.groupCost > 0 ? formatCurrency(dept.groupCost) : '—'}</span>
+            {
+                visibleWidgets.departments && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-3 duration-700">
+                        <div className="flex justify-end gap-2">
+                            <Button
+                                variant={deptFilter === 'main' ? 'default' : 'outline'}
+                                size="sm"
+                                onClick={() => setDeptFilter('main')}
+                            >
+                                Principales
+                            </Button>
+                            <Button
+                                variant={deptFilter === 'verticals' ? 'default' : 'outline'}
+                                size="sm"
+                                onClick={() => setDeptFilter('verticals')}
+                            >
+                                Verticales
+                            </Button>
+                            <Button
+                                variant={deptFilter === 'all' ? 'default' : 'outline'}
+                                size="sm"
+                                onClick={() => setDeptFilter('all')}
+                            >
+                                Todos
+                            </Button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            {deptPerformance
+                                .filter(dept => {
+                                    if (deptFilter === 'all') return true;
+                                    if (deptFilter === 'main') return MAIN_DEPTS.includes(dept.name);
+                                    if (deptFilter === 'verticals') return VERTICAL_DEPTS.includes(dept.name);
+                                    return true;
+                                })
+                                .sort((a, b) => b.income - a.income)
+                                .map(dept => (
+                                    <Card key={dept.key} className="hover:shadow-md transition-shadow">
+                                        <CardHeader className="pb-2">
+                                            <CardTitle className="text-base font-bold flex justify-between items-center">
+                                                {dept.name}
+                                                <span className={`text-sm font-normal px-2 py-1 rounded-full ${dept.margin >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                    {dept.marginPct.toFixed(1)}% margen
+                                                </span>
+                                            </CardTitle>
+                                        </CardHeader>
+                                        <CardContent>
+                                            <div className="space-y-4">
+                                                {/* Facturación */}
+                                                <div className="flex justify-between items-center border-b pb-2">
+                                                    <span className="text-sm font-medium text-gray-500">Facturación</span>
+                                                    <span className="text-lg font-bold text-gray-900">{formatCurrency(dept.income)}</span>
                                                 </div>
-                                            )}
 
-                                            {/* Resultado */}
-                                            <div className="pt-2 border-t">
-                                                <div className="flex justify-between items-center">
-                                                    <span className="font-bold text-gray-900">Resultado</span>
-                                                    <span className={`text-xl font-bold ${dept.margin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                        {formatCurrency(dept.margin)}
-                                                    </span>
+                                                {/* Expenses Breakdown */}
+                                                <div className="space-y-1 text-sm">
+                                                    {dept.categories.map(cat => {
+                                                        const val = dept.breakdown[cat.key] || 0;
+                                                        return (
+                                                            <div key={cat.label} className="flex justify-between text-muted-foreground">
+                                                                <span>{cat.label}</span>
+                                                                <span>{val > 0 ? formatCurrency(val) : '—'}</span>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+
+                                                {/* Group % */}
+                                                {dept.key !== 'Immoral' && (
+                                                    <div className="flex justify-between text-sm text-indigo-600 border-t pt-2">
+                                                        <span className="font-medium">Group % <span className="text-indigo-400 font-normal">({dept.groupPctAnnual}%)</span></span>
+                                                        <span className="font-medium">{dept.groupCost > 0 ? formatCurrency(dept.groupCost) : '—'}</span>
+                                                    </div>
+                                                )}
+
+                                                {/* Resultado */}
+                                                <div className="pt-2 border-t">
+                                                    <div className="flex justify-between items-center">
+                                                        <span className="font-bold text-gray-900">Resultado</span>
+                                                        <span className={`text-xl font-bold ${dept.margin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                            {formatCurrency(dept.margin)}
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             </div>
-                                        </div>
-                                    </CardContent>
+                                        </CardContent>
+                                    </Card>
+                                ))}
+                            {deptPerformance.length === 0 && (
+                                <Card className="col-span-3 p-6 text-center text-muted-foreground border-dashed">
+                                    No department data available.
                                 </Card>
-                            ))}
-                        {deptPerformance.length === 0 && (
-                            <Card className="col-span-3 p-6 text-center text-muted-foreground border-dashed">
-                                No department data available.
-                            </Card>
-                        )}
+                            )}
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
-            <div className={`grid grid-cols-1 ${visibleWidgets.recent_activity && visibleWidgets.upcoming_payments ? 'md:grid-cols-2' : 'md:grid-cols-1'} gap-6`}>
-                {/* Recent Activity */}
-                {visibleWidgets.recent_activity && (
-                    <Card className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                        <CardHeader>
-                            <CardTitle>Recent Activity</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="space-y-4">
-                                {dashboardData?.recentActivity?.map((activity: any, i: number) => (
-                                    <div key={i} className="flex items-center justify-between border-b pb-4 last:border-0 last:pb-0">
-                                        <div className="flex items-center gap-3">
-                                            <div className="h-9 w-9 rounded-full bg-blue-100 flex items-center justify-center">
-                                                <CheckCircle2 className="h-5 w-5 text-blue-600" />
-                                            </div>
-                                            <div>
-                                                <p className="text-sm font-medium text-gray-900">{activity.client_name || 'System'}</p>
-                                                <p className="text-xs text-muted-foreground">Transaction Updated</p>
-                                            </div>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-sm font-bold">{formatCurrency(activity.grand_total || 0)}</p>
-                                            <p className="text-xs text-muted-foreground">{activity.updated_at ? format(new Date(activity.updated_at), 'MMM d, p') : '-'}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                                {!dashboardData?.recentActivity?.length && (
-                                    <p className="text-sm text-muted-foreground text-center py-4">No recent activity.</p>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                )}
-
-                {/* Upcoming Payments List */}
-                {visibleWidgets.upcoming_payments && (
-                    <Card className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-                        <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Clock className="h-5 w-5 text-orange-500" />
-                                Upcoming Payments
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="space-y-4">
-                                {dashboardData?.pendingPayments?.map((payment: any) => (
-                                    <div key={payment.id} className="flex items-center justify-between border-b pb-4 last:border-0 last:pb-0">
-                                        <div className="flex items-start gap-3">
-                                            <div className="h-2 w-2 mt-2 rounded-full bg-orange-500" />
-                                            <div>
-                                                <p className="text-sm font-medium text-gray-900">{payment.payment_concept}</p>
-                                                <p className="text-xs text-muted-foreground">{payment.payee_name}</p>
-                                            </div>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-sm font-bold">{formatCurrency(payment.total_amount)}</p>
-                                            <p className="text-xs text-red-500 font-medium">Due {format(new Date(payment.due_date), 'MMM d')}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                                {!dashboardData?.pendingPayments?.length && (
-                                    <p className="text-sm text-muted-foreground text-center py-4">No pending payments.</p>
-                                )}
-                            </div>
-                        </CardContent>
-                    </Card>
-                )}
-            </div>
-        </div>
+        </div >
     );
 }

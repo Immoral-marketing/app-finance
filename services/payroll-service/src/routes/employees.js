@@ -16,23 +16,31 @@ router.get('/', async (req, res) => {
     try {
         const { is_active, department_id } = req.query;
 
+        // Try with department join first
         let query = supabase
             .from('employees')
-            .select(`
-        *,
-        department:departments(id, name, code)
-      `)
+            .select(`*, department:departments(id, name, code)`)
             .order('last_name');
 
         if (is_active !== undefined) {
             query = query.eq('is_active', is_active === 'true');
         }
-
         if (department_id) {
             query = query.eq('primary_department_id', department_id);
         }
 
-        const { data, error } = await query;
+        let { data, error } = await query;
+
+        // If join fails (e.g. departments table missing), fall back to simple select
+        if (error) {
+            console.warn('Join with departments failed, falling back to simple select:', error.message);
+            const fallback = supabase.from('employees').select('*').order('last_name');
+            if (is_active !== undefined) fallback.eq('is_active', is_active === 'true');
+            if (department_id) fallback.eq('primary_department_id', department_id);
+            const result = await fallback;
+            data = result.data;
+            error = result.error;
+        }
 
         if (error) {
             return res.status(500).json({ error: 'Failed to fetch employees', details: error.message });
@@ -49,6 +57,7 @@ router.get('/', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
 
 /**
  * GET /employees/:id
@@ -96,7 +105,7 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
     try {
         const schema = Joi.object({
-            employee_code: Joi.string().required(),
+            employee_code: Joi.string().optional(),
             first_name: Joi.string().required(),
             last_name: Joi.string().required(),
             email: Joi.string().email().required(),
@@ -104,7 +113,8 @@ router.post('/', async (req, res) => {
             current_salary: Joi.number().min(0).required(),
             position: Joi.string().required(),
             primary_department_id: Joi.string().uuid().required(),
-            is_active: Joi.boolean().default(true)
+            is_active: Joi.boolean().default(true),
+            currency: Joi.string().valid('USD', 'EUR').optional()
         });
 
         const { error, value } = schema.validate(req.body);
@@ -112,14 +122,44 @@ router.post('/', async (req, res) => {
             return res.status(400).json({ error: error.details[0].message });
         }
 
-        // Create employee
+        // Auto-generate employee_code if not provided
+        if (!value.employee_code) {
+            const timestamp = Date.now().toString().slice(-6);
+            const initials = (value.first_name[0] + value.last_name[0]).toUpperCase();
+            value.employee_code = `EMP-${initials}${timestamp}`;
+        }
+
+        // Try to insert with currency first, fall back without it if column doesn't exist
+        const insertData = { ...value };
+
         const { data: employee, error: createError } = await supabase
             .from('employees')
-            .insert(value)
+            .insert(insertData)
             .select()
             .single();
 
         if (createError) {
+            // If currency column doesn't exist, retry without it
+            if (createError.message && createError.message.includes('currency')) {
+                const { currency: _currency, ...dataWithoutCurrency } = insertData;
+                const { data: emp2, error: err2 } = await supabase
+                    .from('employees')
+                    .insert(dataWithoutCurrency)
+                    .select()
+                    .single();
+                if (err2) {
+                    return res.status(500).json({ error: 'Failed to create employee', details: err2.message });
+                }
+                // Create initial salary history
+                await supabase.from('salary_history').insert({
+                    employee_id: emp2.id,
+                    old_salary: null,
+                    new_salary: value.current_salary,
+                    effective_from: value.hire_date,
+                    change_reason: 'Initial salary'
+                });
+                return res.json({ success: true, message: 'Employee created successfully', employee: emp2 });
+            }
             return res.status(500).json({ error: 'Failed to create employee', details: createError.message });
         }
 
@@ -157,7 +197,7 @@ router.patch('/:id/salary', async (req, res) => {
         const schema = Joi.object({
             new_salary: Joi.number().min(0).required(),
             effective_from: Joi.date().iso().required(),
-            change_reason: Joi.string().required(),
+            change_reason: Joi.string().allow('', null).optional().default('Sin motivo especificado'),
             approved_by: Joi.string().uuid().allow(null)
         });
 
@@ -190,6 +230,110 @@ router.patch('/:id/salary', async (req, res) => {
 
     } catch (err) {
         console.error('Error updating salary:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * PATCH /employees/:id
+ * Update employee general data (name, position, email, department, is_active)
+ */
+router.patch('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const schema = Joi.object({
+            first_name: Joi.string(),
+            last_name: Joi.string(),
+            email: Joi.string().email(),
+            position: Joi.string(),
+            primary_department_id: Joi.string().uuid(),
+            is_active: Joi.boolean(),
+            employee_code: Joi.string()
+        }).min(1);
+
+        const { error, value } = schema.validate(req.body);
+        if (error) {
+            return res.status(400).json({ error: error.details[0].message });
+        }
+
+        const { data: employee, error: updateError } = await supabase
+            .from('employees')
+            .update(value)
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (updateError) {
+            return res.status(500).json({ error: 'Failed to update employee', details: updateError.message });
+        }
+
+        res.json({
+            success: true,
+            message: 'Employee updated successfully',
+            employee
+        });
+
+    } catch (err) {
+        console.error('Error updating employee:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * DELETE /employees/:id/permanent
+ * Hard delete: permanently removes the employee and their salary history
+ * IMPORTANT: must be defined BEFORE DELETE /:id to avoid route conflict
+ */
+router.delete('/:id/permanent', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Delete salary history first (FK constraint)
+        await supabase.from('salary_history').delete().eq('employee_id', id);
+
+        // Delete the employee
+        const { error } = await supabase.from('employees').delete().eq('id', id);
+
+        if (error) {
+            return res.status(500).json({ error: 'Failed to delete employee', details: error.message });
+        }
+
+        res.json({ success: true, message: 'Employee permanently deleted' });
+
+    } catch (err) {
+        console.error('Error deleting employee:', err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * DELETE /employees/:id
+ * Soft delete: deactivates the employee (is_active = false)
+ */
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const { data: employee, error } = await supabase
+            .from('employees')
+            .update({ is_active: false })
+            .eq('id', id)
+            .select()
+            .single();
+
+        if (error) {
+            return res.status(500).json({ error: 'Failed to deactivate employee', details: error.message });
+        }
+
+        res.json({
+            success: true,
+            message: 'Employee deactivated successfully',
+            employee
+        });
+
+    } catch (err) {
+        console.error('Error deactivating employee:', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

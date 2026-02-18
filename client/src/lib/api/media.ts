@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_ADMIN_API_URL || 'http://localhost:3010';
+import { fetchApi } from './client';
 
 export interface PlatformInvestment {
     platform_id: string;
@@ -22,19 +22,12 @@ export interface MonthlyInvestmentResponse {
 
 export const mediaApi = {
     getPlatforms: async () => {
-        const res = await fetch(`${API_URL}/media/platforms`);
-        if (!res.ok) throw new Error('Failed to fetch platforms');
-        const data = await res.json();
+        const data = await fetchApi<{ platforms: any[] }>('/media/platforms');
         return data.platforms;
     },
 
     getMonthlyInvestment: async (year: number, month: number): Promise<MonthlyInvestmentResponse> => {
-        const res = await fetch(`${API_URL}/media/investment/${year}/${month}`);
-        if (!res.ok) {
-            const errorData = await res.json().catch(() => ({}));
-            throw new Error(errorData.details || errorData.error || 'Failed to fetch investments');
-        }
-        return res.json();
+        return fetchApi<MonthlyInvestmentResponse>(`/media/investment/${year}/${month}`);
     },
 
     updatePlannedInvestment: async (data: {
@@ -43,13 +36,10 @@ export const mediaApi = {
         fiscal_month: number;
         amount: number
     }) => {
-        const res = await fetch(`${API_URL}/media/planned`, {
+        return fetchApi('/media/planned', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data),
         });
-        if (!res.ok) throw new Error('Failed to update planned investment');
-        return res.json();
     },
 
     updatePlatformInvestment: async (data: {
@@ -59,12 +49,9 @@ export const mediaApi = {
         platform_id: string;
         amount: number
     }) => {
-        const res = await fetch(`${API_URL}/media/platform`, {
+        return fetchApi('/media/platform', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data),
         });
-        if (!res.ok) throw new Error('Failed to update platform investment');
-        return res.json();
     }
 };

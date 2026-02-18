@@ -8,8 +8,35 @@ export interface Employee {
     employee_code: string;
     position: string;
     department_id: string;
+    primary_department_id: string;
     current_salary: number;
     is_active: boolean;
+    email?: string;
+    hire_date?: string;
+    department?: { id: string; name: string; code: string };
+}
+
+export interface CreateEmployeeDTO {
+    employee_code?: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    hire_date: string;
+    current_salary: number;
+    position: string;
+    primary_department_id: string;
+    is_active?: boolean;
+    currency?: 'USD' | 'EUR';
+}
+
+export interface UpdateEmployeeDTO {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    position?: string;
+    primary_department_id?: string;
+    is_active?: boolean;
+    employee_code?: string;
 }
 
 export interface PayrollRecord {
@@ -28,10 +55,54 @@ export interface PayrollRecord {
 }
 
 export const payrollApi = {
+    // Employees
     getEmployees: () => {
         return fetchApi<{ employees: Employee[] }>('/employees', { service: 'PAYROLL' });
     },
 
+    getEmployee: (id: string) => {
+        return fetchApi<{ employee: Employee & { salary_history: any[] } }>(`/employees/${id}`, { service: 'PAYROLL' });
+    },
+
+    createEmployee: (data: CreateEmployeeDTO) => {
+        return fetchApi<{ employee: Employee }>('/employees', {
+            service: 'PAYROLL',
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    },
+
+    updateEmployee: (id: string, data: UpdateEmployeeDTO) => {
+        return fetchApi<{ employee: Employee }>(`/employees/${id}`, {
+            service: 'PAYROLL',
+            method: 'PATCH',
+            body: JSON.stringify(data),
+        });
+    },
+
+    deactivateEmployee: (id: string) => {
+        return fetchApi(`/employees/${id}`, {
+            service: 'PAYROLL',
+            method: 'DELETE',
+        });
+    },
+
+    deleteEmployee: (id: string) => {
+        return fetchApi(`/employees/${id}/permanent`, {
+            service: 'PAYROLL',
+            method: 'DELETE',
+        });
+    },
+
+    updateSalary: (id: string, data: { new_salary: number; effective_from: string; change_reason: string }) => {
+        return fetchApi(`/employees/${id}/salary`, {
+            service: 'PAYROLL',
+            method: 'PATCH',
+            body: JSON.stringify(data),
+        });
+    },
+
+    // Payroll
     getPayroll: (year: number, month: number) => {
         return fetchApi<{ payroll: PayrollRecord[] }>(`/payroll/${year}/${month}`, { service: 'PAYROLL' });
     },
@@ -51,16 +122,5 @@ export const payrollApi = {
             body: JSON.stringify(data)
         });
     },
-
-    getEmployee: (id: string) => {
-        return fetchApi<{ employee: Employee }>(`/employees/${id}`, { service: 'PAYROLL' });
-    },
-
-    updateSalary: (id: string, data: { new_salary: number; effective_from: string; change_reason: string }) => {
-        return fetchApi(`/employees/${id}/salary`, {
-            service: 'PAYROLL',
-            method: 'PATCH',
-            body: JSON.stringify(data)
-        });
-    }
 };
+

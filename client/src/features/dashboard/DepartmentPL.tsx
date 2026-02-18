@@ -238,8 +238,8 @@ export default function DepartmentPL() {
     const fmtCurrency = (val: number) => Math.round(val * 100) / 100;
 
     const fmtDisplay = (val: number) => {
-        const rounded = fmtCurrency(val);
-        return rounded.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+        const rounded = Math.round(val);
+        return rounded.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
     };
 
     const calculateRowTotal = (section: string, dept: string, item: string): number => {
@@ -605,7 +605,7 @@ export default function DepartmentPL() {
         // Custom tooltip formatter
         // Custom tooltip formatter
         const currencyFormatter = (value: any) =>
-            Number(value || 0).toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' €';
+            Math.round(Number(value || 0)).toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €';
 
         return (
             <div className="space-y-6 px-4 pb-6 pt-4">
