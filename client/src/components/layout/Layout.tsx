@@ -1,8 +1,12 @@
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { AIChatWidget } from '@/components/shared/AIChatWidget';
+import { useAuth } from '@/context/AuthContext';
 
 export function Layout() {
+    const { profile, user } = useAuth();
+
     return (
         <div className="min-h-screen bg-muted/40 font-sans">
             <Sidebar />
@@ -14,6 +18,15 @@ export function Layout() {
                     </div>
                 </main>
             </div>
+            {/* ChatHub flotante — disponible en toda la app */}
+            {profile && (
+                <AIChatWidget
+                    userRole={profile.role}
+                    deptCode={profile.department_code}
+                    year={new Date().getFullYear()}
+                    currentUser={user ? { id: user.id, email: user.email || '', full_name: profile.display_name, role: profile.role } : undefined}
+                />
+            )}
         </div>
     );
 }

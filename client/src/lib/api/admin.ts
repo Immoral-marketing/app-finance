@@ -61,7 +61,7 @@ export const adminApi = {
         }>(`/billing/matrix?year=${year}&month=${month}`);
     },
 
-    saveMatrixCell: (data: { year: number, month: number, client_id: string, field: string, value: any, service_id?: string }) => {
+    saveMatrixCell: (data: { year: number, month: number, client_id: string, field: string, value: any, service_id?: string, comment?: string, assigned_to?: string[] }) => {
         return fetchApi('/billing/matrix/save', {
             method: 'POST',
             body: JSON.stringify(data)
@@ -195,8 +195,53 @@ export const adminApi = {
         section: string;
         value: number;
         type: 'budget' | 'real';
+        comment?: string;
+        assigned_to?: string[];
     }) => {
         return fetchApi('/pl/matrix/save', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    // P&L Cell Notes (dedicated note storage, works for all tabs)
+    getPLNotes: (year: number) => {
+        return fetchApi<{ notes: Record<string, { comment: string; assigned_to: string[] }> }>(
+            `/pl/notes/${year}`
+        );
+    },
+
+    savePLNote: (data: {
+        year: number;
+        view_type: 'real' | 'budget' | 'comparison' | 'dept-real' | 'dept-budget' | 'dept-comparison';
+        section: string;
+        dept: string;
+        item: string;
+        month: number;
+        comment: string;
+        assigned_to: string[];
+    }) => {
+        return fetchApi('/pl/notes/save', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    updatePLNoteStatus: (data: { id: string; status: 'done' | 'deleted' }) => {
+        return fetchApi('/pl/notes/status', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    // Chat IA
+    sendChatMessage: (data: {
+        message: string;
+        userRole: string;
+        deptCode?: string | null;
+        year?: number;
+    }) => {
+        return fetchApi<{ reply: string; intent: string; entity: string }>('/chat', {
             method: 'POST',
             body: JSON.stringify(data)
         });

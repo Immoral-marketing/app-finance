@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider } from '@/context/AuthContext';
+import { ThemeProvider } from '@/context/ThemeContext';
 import { Layout } from '@/components/layout/Layout';
 import ProtectedRoute from '@/components/layout/ProtectedRoute';
 import Login from '@/features/auth/Login';
@@ -27,33 +28,35 @@ const queryClient = new QueryClient();
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
+      <ThemeProvider>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<Login />} />
 
-            <Route element={<ProtectedRoute />}>
-              <Route element={<Layout />}>
-                <Route index element={<Dashboard />} />
-                <Route path="billing" element={<BillingMatrix />} />
-                <Route path="media-investment" element={<MediaTracker />} />
-                <Route path="expenses" element={<ExpensesList />} />
-                <Route path="payroll" element={<Payroll />} />
-                <Route path="commissions" element={<Commissions />} />
-                <Route path="departamentos/:deptCode" element={<DepartmentPL />} />
-                <Route path="pl-matrix" element={<PLMatrix />} />
-                <Route path="fees" element={<FeeConfiguration />} />
-                <Route path="payments" element={<PaymentSchedule />} />
-                <Route path="clients" element={<ClientsPage />} />
-                <Route path="settings" element={<SettingsPage />} />
-                <Route path="users" element={<UserManagement />} />
+              <Route element={<ProtectedRoute />}>
+                <Route element={<Layout />}>
+                  <Route index element={<Dashboard />} />
+                  <Route path="billing" element={<BillingMatrix />} />
+                  <Route path="media-investment" element={<MediaTracker />} />
+                  <Route path="expenses" element={<ExpensesList />} />
+                  <Route path="payroll" element={<Payroll />} />
+                  <Route path="commissions" element={<Commissions />} />
+                  <Route path="departamentos/:deptCode" element={<DepartmentPL />} />
+                  <Route path="pl-matrix" element={<PLMatrix />} />
+                  <Route path="fees" element={<FeeConfiguration />} />
+                  <Route path="payments" element={<PaymentSchedule />} />
+                  <Route path="clients" element={<ClientsPage />} />
+                  <Route path="settings" element={<SettingsPage />} />
+                  <Route path="users" element={<UserManagement />} />
+                </Route>
               </Route>
-            </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </BrowserRouter>
-      </AuthProvider>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

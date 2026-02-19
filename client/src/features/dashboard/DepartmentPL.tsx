@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/lib/api/admin';
 import { Button } from '@/components/ui/Button';
-import { Download, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Download, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, MessageSquare } from 'lucide-react';
 import {
     BarChart, Bar, LineChart, Line, AreaChart, Area,
     XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
     ReferenceLine
 } from 'recharts';
+import { CommentModal } from '@/features/pl/PLMatrix';
 
 const TABS = ['Dashboard', 'Real', 'Presupuesto', 'Comparación'] as const;
 type TabType = typeof TABS[number];
@@ -110,8 +111,130 @@ export default function DepartmentPL() {
     const [year, setYear] = useState(new Date().getFullYear());
     const [activeTab, setActiveTab] = useState<TabType>('Dashboard');
     const [cellValues, setCellValues] = useState<Record<string, number>>({});
+    const queryClient = useQueryClient();
+    const hoverTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
     const typeParam = activeTab === 'Presupuesto' ? 'budget' : 'real';
+
+    // ── Notes state ───────────────────────────────────────────────────────────
+    // IMPORTANT: dept notes use 'dept-real'/'dept-budget'/'dept-comparison' — completely separate
+    // from PLMatrix notes. Same table, different view_type per tab.
+    type DeptNoteType = 'dept-real' | 'dept-budget' | 'dept-comparison';
+    const deptNoteType: DeptNoteType =
+        activeTab === 'Presupuesto' ? 'dept-budget' :
+            activeTab === 'Comparación' ? 'dept-comparison' :
+                'dept-real';
+
+    const [contextMenu, setContextMenu] = useState<{
+        x: number; y: number;
+        section: string; dept: string; item: string;
+        monthIdx: number; viewType: DeptNoteType;
+    } | null>(null);
+
+    const [editingComment, setEditingComment] = useState<{
+        isOpen: boolean; section: string; dept: string; item: string;
+        monthIdx: number; initialValue: string; initialAssignedTo: string[];
+        saveType: DeptNoteType; noteId?: string;
+    } | null>(null);
+
+    const [hoveredCell, setHoveredCell] = useState<{
+        section: string; dept: string; item: string; monthIdx: number;
+        viewType: DeptNoteType; x: number; y: number;
+    } | null>(null);
+
+    // Close context menu on click elsewhere
+    useEffect(() => {
+        const handler = () => setContextMenu(null);
+        document.addEventListener('click', handler);
+        return () => document.removeEventListener('click', handler);
+    }, []);
+
+
+    // ── Notes query & mutation ────────────────────────────────────────────────
+    const { data: notesData } = useQuery({
+        queryKey: ['pl-notes', year],
+        queryFn: () => adminApi.getPLNotes(year),
+        staleTime: 30000,
+    });
+    const cellNotes = notesData?.notes || {};
+
+    const { data: usersData } = useQuery({
+        queryKey: ['users'],
+        queryFn: adminApi.getUsers
+    });
+    const users = usersData?.users || [];
+
+    const noteSaveMutation = useMutation({
+        mutationFn: adminApi.savePLNote,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pl-notes', year] });
+        },
+        onError: () => { console.error('Error saving note'); }
+    });
+
+    const getNoteKey = (viewType: string, section: string, dept: string, item: string, monthIdx: number) =>
+        `${viewType}-${section}-${dept}-${item}-${monthIdx}`;
+
+    const getCellNote = (viewType: string, section: string, dept: string, item: string, monthIdx: number): {
+        id?: string; comment: string; assigned_to: string[]; status?: string
+    } | null =>
+        cellNotes[getNoteKey(viewType, section, dept, item, monthIdx)] || null;
+
+    const noteStatusMutation = useMutation({
+        mutationFn: adminApi.updatePLNoteStatus,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pl-notes', year] });
+        },
+        onError: () => { console.error('Error updating note status'); }
+    });
+
+    const handleContextMenu = (e: React.MouseEvent, section: string, dept: string, item: string, monthIdx: number) => {
+        e.preventDefault();
+        setContextMenu({
+            x: e.clientX, y: e.clientY,
+            section, dept, item, monthIdx,
+            viewType: deptNoteType
+        });
+    };
+
+    const handleMouseEnter = (e: React.MouseEvent, section: string, dept: string, item: string, monthIdx: number) => {
+        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
+        const note = getCellNote(deptNoteType, normalizedSection, dept, item, monthIdx);
+        if (!note?.comment && (!note?.assigned_to || note.assigned_to.length === 0)) return;
+        const rect = (e.target as HTMLElement).getBoundingClientRect();
+        if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+        hoverTimeoutRef.current = setTimeout(() => {
+            setHoveredCell({ section, dept, item, monthIdx, viewType: deptNoteType, x: rect.right + 10, y: rect.top });
+        }, 300);
+    };
+
+    const handleMouseLeave = () => {
+        if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+        setHoveredCell(null);
+    };
+
+    const openNoteModal = (section: string, dept: string, item: string, monthIdx: number) => {
+        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
+        const existingNote = getCellNote(deptNoteType, normalizedSection, dept, item, monthIdx);
+        setEditingComment({
+            isOpen: true, section, dept, item, monthIdx,
+            initialValue: existingNote?.comment || '',
+            initialAssignedTo: existingNote?.assigned_to || [],
+            saveType: deptNoteType,
+            noteId: existingNote?.id
+        });
+    };
+
+    const handleSaveNote = (val: string, assignedTo: string[]) => {
+        if (!editingComment) return;
+        const { section, dept, item, monthIdx, saveType } = editingComment;
+        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
+        setEditingComment(null);
+        noteSaveMutation.mutate({
+            year, view_type: saveType, section: normalizedSection,
+            dept, item, month: monthIdx + 1, comment: val, assigned_to: assignedTo
+        });
+    };
 
     // Fetch for Real/Presupuesto/Dashboard
     const { data: matrixData, isLoading } = useQuery({
@@ -303,11 +426,23 @@ export default function DepartmentPL() {
         { key: 'gastosOp', label: 'Gastos Operativos', items: deptGastosOp },
     ].filter(cat => cat.items.length > 0);
 
-    // --- Read-only cell renderer ---
+    // --- Read-only cell renderer (with note indicator) ---
     const renderReadOnlyCell = (section: string, dept: string, item: string, monthIdx: number) => {
         const value = getCellValue(section, dept, item, monthIdx);
+        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
+        const note = getCellNote(deptNoteType, normalizedSection, dept, item, monthIdx);
+        const hasNote = !!note?.comment || (note?.assigned_to && note.assigned_to.length > 0);
         return (
-            <td key={monthIdx} className="border border-gray-200 px-1 py-1 text-right text-xs tabular-nums">
+            <td
+                key={monthIdx}
+                className="border border-gray-200 px-1 py-1 text-right text-xs tabular-nums relative cursor-context-menu"
+                onContextMenu={(e) => handleContextMenu(e, section, dept, item, monthIdx)}
+                onMouseEnter={(e) => handleMouseEnter(e, section, dept, item, monthIdx)}
+                onMouseLeave={handleMouseLeave}
+            >
+                {hasNote && (
+                    <div className="absolute top-0 right-0 w-0 h-0 border-t-[6px] border-l-[6px] border-t-orange-500 border-l-transparent pointer-events-none" />
+                )}
                 {value ? fmtDisplay(value) : <span className="text-gray-300">0</span>}
             </td>
         );
@@ -913,6 +1048,83 @@ export default function DepartmentPL() {
         </div>
     );
 
+    // Shared overlays rendered on every tab
+    const renderOverlays = () => (
+        <>
+            {/* Context Menu */}
+            {contextMenu && (
+                <div
+                    className="fixed z-[200] bg-white border rounded-lg shadow-lg py-1 w-48 animate-in fade-in zoom-in duration-150"
+                    style={{ top: contextMenu.y, left: contextMenu.x }}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <button
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 flex items-center gap-2"
+                        onClick={() => {
+                            openNoteModal(contextMenu.section, contextMenu.dept, contextMenu.item, contextMenu.monthIdx);
+                            setContextMenu(null);
+                        }}
+                    >
+                        <MessageSquare size={14} />
+                        {getCellNote(contextMenu.viewType, contextMenu.section === 'revenue' ? 'revenue' : 'expense', contextMenu.dept, contextMenu.item, contextMenu.monthIdx)?.comment
+                            ? 'Editar Nota'
+                            : 'Insertar Nota'}
+                    </button>
+                </div>
+            )}
+
+            {/* Hover Popover */}
+            {hoveredCell && (() => {
+                const normalizedSection = hoveredCell.section === 'revenue' ? 'revenue' : 'expense';
+                const note = getCellNote(hoveredCell.viewType, normalizedSection, hoveredCell.dept, hoveredCell.item, hoveredCell.monthIdx);
+                if (!note?.comment && (!note?.assigned_to || note.assigned_to.length === 0)) return null;
+                const assignedUsers = users.filter((u: any) => note?.assigned_to?.includes(u.id));
+                return (
+                    <div
+                        className="fixed z-[100] bg-white border rounded-lg shadow-xl p-3 w-[250px] animate-in fade-in zoom-in duration-200"
+                        style={{ top: hoveredCell.y, left: hoveredCell.x }}
+                    >
+                        {note?.comment && <div className="text-sm text-gray-800 mb-2 whitespace-pre-wrap">{note.comment}</div>}
+                        {assignedUsers.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2 border-t pt-2">
+                                <span className="text-xs text-gray-500 w-full mb-1">Asignado a:</span>
+                                {assignedUsers.map((u: any) => (
+                                    <div key={u.id} className="flex items-center gap-1 bg-blue-50 px-1.5 py-0.5 rounded-full border border-blue-100">
+                                        <div className="w-4 h-4 rounded-full bg-blue-500 flex items-center justify-center text-[8px] text-white font-bold">
+                                            {(u.display_name || u.email).substring(0, 2).toUpperCase()}
+                                        </div>
+                                        <span className="text-xs text-blue-700">{u.display_name || u.email}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <p className="text-[10px] text-gray-400 mt-2">Clic derecho para editar nota</p>
+                    </div>
+                );
+            })()}
+
+            {/* Note Modal */}
+            {editingComment && (
+                <CommentModal
+                    isOpen={editingComment.isOpen}
+                    onClose={() => setEditingComment(null)}
+                    onSave={handleSaveNote}
+                    onStatusChange={(status) => {
+                        if (editingComment?.noteId) {
+                            noteStatusMutation.mutate({ id: editingComment.noteId, status });
+                        }
+                        setEditingComment(null);
+                    }}
+                    initialValue={editingComment.initialValue}
+                    initialAssignedTo={editingComment.initialAssignedTo}
+                    title={`Nota — ${editingComment.item} (${MONTHS[editingComment.monthIdx]})`}
+                    users={users}
+                    noteId={editingComment.noteId}
+                />
+            )}
+        </>
+    );
+
     // --- DASHBOARD TAB ---
     if (activeTab === 'Dashboard') {
         return (
@@ -924,6 +1136,7 @@ export default function DepartmentPL() {
                         <div className="bg-white rounded-lg shadow-lg p-4">Cargando...</div>
                     </div>
                 )}
+                {renderOverlays()}
             </div>
         );
     }
@@ -934,6 +1147,7 @@ export default function DepartmentPL() {
             <div className="space-y-4 -mx-6 -mt-6">
                 {renderHeader(`P&L ${deptLabel.toUpperCase()} — COMPARACIÓN ${year}`)}
                 {renderComparisonTable()}
+                {renderOverlays()}
             </div>
         );
     }
@@ -1043,6 +1257,8 @@ export default function DepartmentPL() {
                     <div className="bg-white rounded-lg shadow-lg p-4">Cargando...</div>
                 </div>
             )}
+
+            {renderOverlays()}
         </div>
     );
 }

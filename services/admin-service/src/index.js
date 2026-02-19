@@ -1,6 +1,11 @@
 import express from 'express'; // Server restart trigger
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+const __dotenvDir = dirname(fileURLToPath(import.meta.url));
+// Carga el .env raíz del monorepo (src/ → admin-service/ → services/ → app-finance/)
+dotenv.config({ path: resolve(__dotenvDir, '../../../.env') });
 import billingRoutes from './routes/billing.js';
 import expenseRoutes from './routes/expenses.js';
 import periodsRoutes from './routes/periods.js';
@@ -12,6 +17,9 @@ import paymentRoutes from './routes/payments.js';
 import dashboardRoutes from './routes/dashboard.js';
 import settingsRoutes from './routes/settings.js';
 import usersRoutes from './routes/users.js';
+import chatRoutes from './routes/chat.js';
+import messagesRoutes from './routes/messages.js';
+import notificationsRoutes from './routes/notifications.js';
 
 dotenv.config();
 
@@ -33,6 +41,9 @@ app.use('/payments', paymentRoutes);
 app.use('/dashboard', dashboardRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/users', usersRoutes);
+app.use('/chat', chatRoutes);
+app.use('/messages', messagesRoutes);
+app.use('/notifications', notificationsRoutes);
 
 
 // Health Check

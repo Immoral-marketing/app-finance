@@ -1,6 +1,7 @@
 import express from 'express';
 import Joi from 'joi';
 import supabase from '../config/supabase.js';
+import { createNotifications } from './notifications.js';
 
 const router = express.Router();
 
@@ -304,7 +305,18 @@ router.get('/matrix', async (req, res) => {
                     immoral_total: billing?.immoral_general_total || 0,
                     grand_total: billing?.grand_total || 0
                 },
-                services: serviceValues
+                services: serviceValues,
+                comments: {
+                    metadata: billing?.cell_metadata || {},
+                    services: clientDetails.reduce((acc, d) => {
+                        if (d.cell_metadata && (d.cell_metadata.comment || (d.cell_metadata.assigned_to && d.cell_metadata.assigned_to.length > 0))) {
+                            acc[d.service_id] = d.cell_metadata;
+                        } else if (d.notes) {
+                            acc[d.service_id] = d.notes;
+                        }
+                        return acc;
+                    }, {})
+                }
             };
         });
 
@@ -327,14 +339,14 @@ router.get('/matrix', async (req, res) => {
  */
 router.post('/matrix/save', async (req, res) => {
     try {
-        const { year, month, client_id, field, value, service_id } = req.body;
+        const { year, month, client_id, field, value, service_id, comment, assigned_to } = req.body;
 
-        console.log(`Saving matrix cell: ${field} = ${value} for Client ${client_id}`);
+        console.log(`Saving matrix cell: ${field} = ${value} (comment: ${comment}, assigned: ${assigned_to}) for Client ${client_id}`);
 
         // 1. Get or Create Monthly Billing Record
         let { data: billing, error: getError } = await supabase
             .from('monthly_billing')
-            .select('id, total_ad_investment, applied_fee_percentage, platform_count, platform_costs')
+            .select('id, total_ad_investment, applied_fee_percentage, platform_count, platform_costs, cell_metadata')
             .eq('client_id', client_id)
             .eq('fiscal_year', year)
             .eq('fiscal_month', month)
@@ -350,7 +362,8 @@ router.post('/matrix/save', async (req, res) => {
                     fiscal_month: month,
                     total_ad_investment: 0,
                     applied_fee_percentage: 10,
-                    platform_count: 1
+                    platform_count: 1,
+                    cell_metadata: {}
                 })
                 .select()
                 .single();
@@ -363,11 +376,6 @@ router.post('/matrix/save', async (req, res) => {
 
         // 2. Handle Update Logic
         if (field === 'vencimiento') {
-            // Update Contract (or create one if missing?)
-            // For now, let's assuming updating the active contract's effective_to date (Day only? or Full Date?)
-            // User likely edits the DAY of the month.
-            // Let's assume input is just a number [1-31]. 
-            // We need to fetch the contract first.
             const { data: contracts } = await supabase
                 .from('contracts')
                 .select('id, effective_to')
@@ -380,131 +388,145 @@ router.post('/matrix/save', async (req, res) => {
                 const contract = contracts[0];
                 let newDate = new Date(contract.effective_to || new Date());
                 newDate.setDate(parseInt(value)); // Set day
-
-                await supabase
-                    .from('contracts')
-                    .update({ effective_to: newDate.toISOString() })
-                    .eq('id', contract.id);
-            } else {
-                // No active contract logic? Ignore for now or create?
-                console.warn(`No active contract for client ${client_id} to update vencimiento`);
+                await supabase.from('contracts').update({ effective_to: newDate.toISOString() }).eq('id', contract.id);
             }
 
         } else if (field === 'vertical') {
-            // Update Client Vertical
-            // Value should be vertical Code or Name? Frontend should send ID preferably, or we look it up.
-            // Assuming frontend sends the Vertical Name/Code string for now based on previous UI?
-            // Actually, let's expect the ID if possible, or lookup by code.
-            // If value is a string "Content", look up ID.
-
             const { data: vert } = await supabase
                 .from('verticals')
                 .select('id')
-                .ilike('name', value) // loose match
-                .single();
+                .ilike('name', value)
+                .maybeSingle();
 
             if (vert) {
-                await supabase
-                    .from('clients')
-                    .update({ vertical_id: vert.id })
-                    .eq('id', client_id);
+                await supabase.from('clients').update({ vertical_id: vert.id }).eq('id', client_id);
             }
 
         } else if (field === 'service_amount') {
             if (!service_id) throw new Error('Service ID required for service amount update');
 
-            // Check Department for this service
             const { data: service } = await supabase.from('services').select('department_id, name').eq('id', service_id).single();
             if (!service) throw new Error('Service not found');
 
-            // Handle Manual Override Logic
-            // If checking PAID_MEDIA_STRATEGY
-            const { data: stratService } = await supabase
-                .from('services')
-                .select('id')
-                .eq('code', 'PAID_MEDIA_STRATEGY')
-                .maybeSingle();
+            // Handle Manual Override Logic (Strategy)
+            const { data: stratService } = await supabase.from('services').select('id').eq('code', 'PAID_MEDIA_STRATEGY').maybeSingle();
 
             if (stratService && stratService.id === service_id) {
-                console.log('User manually editing Strategy Service -> Enabling Override');
-                // Set is_manual_override = true
-                await supabase
-                    .from('monthly_billing')
-                    .update({
-                        is_manual_override: true,
-                        fee_paid: parseFloat(value) // Sync fee_paid
-                    })
+                await supabase.from('monthly_billing')
+                    .update({ is_manual_override: true, fee_paid: parseFloat(value) })
                     .eq('id', billing.id);
             }
 
             // Upsert Detail
             const { data: existingDetail } = await supabase
                 .from('billing_details')
-                .select('id')
+                .select('id, cell_metadata')
                 .eq('monthly_billing_id', billing.id)
                 .eq('service_id', service_id)
                 .single();
 
-            // If value is empty, null, or zero, DELETE the record
             const numValue = parseFloat(value);
-            const isEmpty = !value || value === '' || numValue === 0 || isNaN(numValue);
+            const isEmptyValue = !value || value === '' || numValue === 0 || isNaN(numValue);
+            const hasComment = (comment !== undefined && comment !== null && comment !== '') || (assigned_to && assigned_to.length > 0);
 
-            if (isEmpty && existingDetail) {
-                // Delete the record if it exists and value is empty
+            if (isEmptyValue && !hasComment && existingDetail) {
                 await supabase.from('billing_details').delete().eq('id', existingDetail.id);
-            } else if (!isEmpty) {
-                // Only update/insert if value is not empty
+            } else if (!isEmptyValue || hasComment) {
+                // Prepare Updates
+                const payload = {
+                    amount: isEmptyValue ? 0 : numValue
+                };
+
+                // Sync Notes (Legacy/Simple)
+                if (comment !== undefined) payload.notes = comment;
+
+                // Sync Cell Metadata (Rich)
+                if (comment !== undefined || assigned_to !== undefined) {
+                    const currentMeta = existingDetail?.cell_metadata || {};
+                    const newMeta = {
+                        ...currentMeta,
+                        updated_at: new Date().toISOString()
+                    };
+                    if (comment !== undefined) newMeta.comment = comment;
+                    if (assigned_to !== undefined) newMeta.assigned_to = assigned_to;
+
+                    payload.cell_metadata = newMeta;
+                }
+
                 if (existingDetail) {
-                    await supabase.from('billing_details').update({ amount: numValue }).eq('id', existingDetail.id);
+                    await supabase.from('billing_details').update(payload).eq('id', existingDetail.id);
                 } else {
                     await supabase.from('billing_details').insert({
                         monthly_billing_id: billing.id,
                         department_id: service.department_id,
                         service_id: service_id,
                         service_name: service.name,
-                        amount: numValue
+                        amount: isEmptyValue ? 0 : numValue,
+                        notes: comment || null,
+                        cell_metadata: payload.cell_metadata || {}
                     });
                 }
+
+                // Notificar a usuarios asignados en esta celda
+                if (assigned_to?.length > 0) {
+                    const title = '📋 Has sido asignado en Billing Matrix';
+                    const body = `Cliente · ${field || service_id} · ${year}/${month}${comment ? `\n"${comment}"` : ''}`;
+                    createNotifications(assigned_to, 'note_assigned', title, body, 'billing_note', `${client_id}-${service_id}-${year}-${month}`)
+                        .catch(e => console.error('Billing notif error:', e.message));
+                }
             }
-            // If isEmpty and no existingDetail, do nothing (no record to delete)
+
         } else {
-            // Metadata Update
+            // Metadata Update (Header Cells)
             const updateData = {};
-            // If user edits 'investment' in Matrix, we update 'total_actual_investment' (Manual Override of Actuals)
-            // We DO NOT update 'total_ad_investment' (Planned)
             if (field === 'investment') updateData.total_actual_investment = value;
             if (field === 'fee_pct') updateData.applied_fee_percentage = value;
             if (field === 'platform_count') updateData.platform_count = value;
 
-            if (['investment', 'fee_pct', 'platform_count'].includes(field)) {
-                // Fetch client fee_config
-                const { data: clientData } = await supabase
-                    .from('clients')
-                    .select('fee_config')
-                    .eq('id', client_id)
-                    .single();
+            // Updated Cell Metadata (Header)
+            if (comment !== undefined || assigned_to !== undefined) {
+                const currentMeta = billing.cell_metadata || {};
+                const cellData = currentMeta[field] || {};
 
-                const feeConfig = clientData?.fee_config || {
-                    fee_type: 'fixed',
-                    fixed_pct: 10,
-                    platform_cost_first: 700,
-                    platform_cost_additional: 300
+                const newCellData = {
+                    ...cellData,
+                    updated_at: new Date().toISOString()
                 };
 
-                // Use the NEW value if being edited, else fallback to DB value
-                // For Investment: Use what's being edited or the existing Actual Investment
-                // NOTE: We should read 'total_actual_investment' from DB if not editing it.
-                // But 'billing' object (fetched above) might have old value (needs to be fetched with new column in select)
-                // We'll trust 'billing' has ALL columns (*)
+                // Update properties if provided
+                if (comment !== undefined) newCellData.comment = comment;
+                if (assigned_to !== undefined) newCellData.assigned_to = assigned_to;
+
+                // Si completely empty, limpiar; si no, guardar
+                if ((!newCellData.comment) && (!newCellData.assigned_to || newCellData.assigned_to.length === 0)) {
+                    delete currentMeta[field];
+                } else {
+                    currentMeta[field] = newCellData;
+                    // Notificar usuarios asignados en header cell
+                    if (assigned_to?.length > 0) {
+                        const title = '📋 Has sido asignado en Billing Matrix';
+                        const body = `Campo: ${field} · ${year}/${month}${comment ? `\n"${comment}"` : ''}`;
+                        createNotifications(assigned_to, 'note_assigned', title, body, 'billing_note', `${client_id}-${field}-${year}-${month}`)
+                            .catch(e => console.error('Billing header notif error:', e.message));
+                    }
+                }
+
+                updateData.cell_metadata = currentMeta;
+            }
+
+            // ... Recalculate Fees logic (simplified copy from original) ...
+            if (['investment', 'fee_pct', 'platform_count'].includes(field)) {
+                const { data: clientData } = await supabase.from('clients').select('fee_config').eq('id', client_id).single();
+                const feeConfig = clientData?.fee_config || { fee_type: 'fixed', fixed_pct: 10, platform_cost_first: 700, platform_cost_additional: 300 };
+
                 const inv = field === 'investment' ? parseFloat(value) : (billing.total_actual_investment || 0);
                 const count = field === 'platform_count' ? parseInt(value) : (billing.platform_count || 1);
 
-                // Calculate fee percentage (fixed or variable)
-                // Determine Fee %
                 let feePct = 0;
                 if (field === 'fee_pct') {
                     feePct = parseFloat(value);
                 } else if (feeConfig.fee_type === 'variable') {
+                    // ... variable logic ...
                     if (feeConfig.variable_ranges?.length > 0) {
                         const range = feeConfig.variable_ranges.find(r => {
                             const min = Number(r.min || 0);
@@ -517,13 +539,8 @@ router.post('/matrix/save', async (req, res) => {
                     feePct = billing.applied_fee_percentage || Number(feeConfig.fixed_pct || 0);
                 }
 
-                // Platform Cost
                 const usePlatformCosts = feeConfig.use_platform_costs === true;
-
-                // LOGIC CHANGE: Only apply platform costs if Investment > 0 OR explicit count > 1
-                // We trust the 'inv' variable here (which is either DB value or manually edited value)
                 const shouldApply = inv > 0 || count > 1;
-
                 let platformCost = 0;
                 if (usePlatformCosts && shouldApply) {
                     const calcCount = Math.max(1, count);
@@ -555,11 +572,9 @@ router.post('/matrix/save', async (req, res) => {
             }
 
             if (Object.keys(updateData).length > 0) {
-                // If user edits investment/fee manually, enable Override
                 if (field === 'investment' || field === 'fee_pct') {
                     updateData.is_manual_override = true;
                 }
-
                 await supabase.from('monthly_billing').update(updateData).eq('id', billing.id);
             }
         }
