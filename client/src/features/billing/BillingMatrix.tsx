@@ -9,7 +9,6 @@ import { Download, UserPlus } from 'lucide-react';
 import { ClientModal } from '@/features/clients/components/ClientModal';
 import { clientsApi } from '@/lib/api/clients';
 import { CreateClientDTO } from '@/types/client';
-import { formatNumber } from '@/lib/utils';
 import { toast } from 'sonner';
 
 
