@@ -140,7 +140,21 @@ export const adminApi = {
 
     // Clients
     getClients: () => {
-        return fetchApi<{ clients: { id: string; name: string }[] }>('/clients');
+        return fetchApi<{ clients: { id: string; name: string; fee_config?: any }[] }>('/clients');
+    },
+
+    // Billing Matrix Row Actions
+    deleteMatrixRow: (year: number, month: number, client_id: string) => {
+        return fetchApi(`/billing/matrix/row?year=${year}&month=${month}&client_id=${client_id}`, {
+            method: 'DELETE'
+        });
+    },
+
+    duplicateMatrixRow: (year: number, month: number, client_id: string) => {
+        return fetchApi('/billing/matrix/row/duplicate', {
+            method: 'POST',
+            body: JSON.stringify({ year, month, client_id })
+        });
     },
 
     // Payments

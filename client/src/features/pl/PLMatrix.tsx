@@ -23,6 +23,7 @@ const REVENUE_STRUCTURE = [
     { dept: 'Imseo', services: ['SEO', 'Comisiones'] },
     { dept: 'Immoral', services: ['Otros servicios', 'Otras comisiones'] },
     { dept: 'Imcontent', services: ['Budget Nutfruit'] },
+    { dept: 'Imsales', services: ['Setup inicial (ims)'] },
     { dept: 'Imsales', services: ['Captación'] },
 ];
 
@@ -469,6 +470,7 @@ export default function PLMatrix() {
     };
 
     const fmt = (val: number) => Math.round(val * 100) / 100;
+    const fmtDisplay = (val: number) => val ? Math.round(val).toLocaleString('de-DE') : '0';
 
     const calculateRowTotal = (section: string, dept: string, item: string): number => {
         let total = 0;
@@ -509,11 +511,17 @@ export default function PLMatrix() {
     const ingresosTotals = calculateSectionTotal('revenue', REVENUE_STRUCTURE);
     const ingresosAnual = ingresosTotals.reduce((a, b) => a + b, 0);
 
-    const gastosTotals = Array(12).fill(0);
-    ['personal', 'comisiones', 'marketing', 'formacion', 'software', 'adspent', 'gastosOp'].forEach(key => {
+    // Calculate each expense category subtotal for Gastos de Explotación row
+    const EXPENSE_KEYS_LIST = ['personal', 'comisiones', 'marketing', 'formacion', 'software', 'adspent', 'gastosOp'] as const;
+    const expenseCategoryTotals: Record<string, number[]> = {};
+    EXPENSE_KEYS_LIST.forEach(key => {
         const items = EXPENSE_STRUCTURE[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
-        const totals = calculateSectionTotal(key, items);
-        totals.forEach((v, i) => gastosTotals[i] += v);
+        expenseCategoryTotals[key] = calculateSectionTotal(key, items);
+    });
+
+    const gastosTotals = Array(12).fill(0);
+    EXPENSE_KEYS_LIST.forEach(key => {
+        expenseCategoryTotals[key].forEach((v, i) => gastosTotals[i] += v);
     });
     const gastosAnual = gastosTotals.reduce((a, b) => a + b, 0);
 
@@ -550,7 +558,8 @@ export default function PLMatrix() {
         personal: 'Personal', comisiones: 'Comisiones', marketing: 'Marketing',
         formacion: 'Formación', software: 'Software', adspent: 'Adspent', gastosOp: 'Gastos Op.',
     };
-    const alertMonthIdx = new Date().getMonth();
+    const [selectedAlertMonth, setSelectedAlertMonth] = useState(new Date().getMonth());
+    const alertMonthIdx = selectedAlertMonth;
 
     const revRealMonth = realRevTotals[alertMonthIdx] || 0;
     const revBudgetMonth = budgetRevTotals[alertMonthIdx] || 0;
@@ -580,6 +589,7 @@ export default function PLMatrix() {
         const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
         const note = getCellNote(typeParam as 'real' | 'budget', normalizedSection, dept, item, monthIdx);
         const hasNote = !!note?.comment || (note?.assigned_to && note.assigned_to.length > 0);
+        const cellKey = getCellKey(section, dept, item, monthIdx);
 
         return (
             <td
@@ -590,22 +600,32 @@ export default function PLMatrix() {
                 onMouseLeave={handleMouseLeave}
             >
                 <input
-                    type="number"
-                    value={cell.value || ''}
-                    onChange={(e) => handleCellChange(section, dept, item, monthIdx, e.target.value)}
+                    key={cellKey + '-' + cell.value}
+                    type="text"
+                    inputMode="decimal"
+                    defaultValue={cell.value || ''}
+                    onFocus={(e) => {
+                        e.target.select();
+                    }}
                     onBlur={(e) => {
+                        const raw = e.target.value.trim();
+                        const numVal = Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
+                        handleCellChange(section, dept, item, monthIdx, String(numVal));
                         saveMutation.mutate({
                             year,
                             month: monthIdx + 1,
                             dept,
                             item,
                             section: normalizedSection,
-                            value: Number(e.target.value),
+                            value: numVal,
                             type: typeParam as 'budget' | 'real',
                         });
                     }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    }}
                     className="w-full h-full px-1 py-1 text-right text-xs bg-transparent border-0 focus:outline-none focus:bg-yellow-50"
-                    style={{ minWidth: '50px' }}
+                    style={{ minWidth: '50px', MozAppearance: 'textfield' } as React.CSSProperties}
                 />
                 {hasNote && (
                     <div className="absolute top-0 right-0 w-0 h-0 border-t-[6px] border-l-[6px] border-t-red-500 border-l-transparent pointer-events-none" />
@@ -631,7 +651,7 @@ export default function PLMatrix() {
                         <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">{service}</td>
                         {MONTHS_FULL.map((_, monthIdx) => renderEditableCell('revenue', group.dept, service, monthIdx))}
                         <td className="border border-gray-200 px-1 py-1 text-right text-xs font-medium bg-gray-50">
-                            {calculateRowTotal('revenue', group.dept, service) || 0}
+                            {fmtDisplay(calculateRowTotal('revenue', group.dept, service))}
                         </td>
                     </tr>
                 );
@@ -655,9 +675,9 @@ export default function PLMatrix() {
                 <td className="border border-orange-200 px-2 py-1.5 text-xs font-semibold text-orange-800"></td>
                 <td className="border border-orange-200 px-2 py-1.5 text-xs font-semibold text-orange-800">{categoryName}</td>
                 {categoryTotals.map((val, i) => (
-                    <td key={i} className="border border-orange-200 px-1 py-1.5 text-right text-xs font-medium text-orange-700">{val || 0}</td>
+                    <td key={i} className="border border-orange-200 px-1 py-1.5 text-right text-xs font-medium text-orange-700">{fmtDisplay(val)}</td>
                 ))}
-                <td className="border border-orange-200 px-1 py-1.5 text-right text-xs font-semibold text-orange-800">{categoryAnnual || 0}</td>
+                <td className="border border-orange-200 px-1 py-1.5 text-right text-xs font-semibold text-orange-800">{fmtDisplay(categoryAnnual)}</td>
             </tr>
         );
 
@@ -676,7 +696,7 @@ export default function PLMatrix() {
                         <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">{item}</td>
                         {MONTHS_FULL.map((_, monthIdx) => renderEditableCell(sectionKey, group.dept, item, monthIdx))}
                         <td className="border border-gray-200 px-1 py-1 text-right text-xs font-medium bg-gray-50">
-                            {calculateRowTotal(sectionKey, group.dept, item) || 0}
+                            {fmtDisplay(calculateRowTotal(sectionKey, group.dept, item))}
                         </td>
                     </tr>
                 );
@@ -930,8 +950,16 @@ export default function PLMatrix() {
                                 {/* Current Month */}
                                 <div className="bg-white border rounded-xl p-4 shadow-sm">
                                     <div className="flex items-center justify-between mb-3">
-                                        <h3 className="font-semibold text-sm text-gray-700">📅 {MONTHS_FULL[alertMonthIdx]} — Resumen</h3>
-                                        <span className="text-xs text-gray-400">Mes actual</span>
+                                        <h3 className="font-semibold text-sm text-gray-700">📅 Resumen Mensual</h3>
+                                        <select
+                                            value={selectedAlertMonth}
+                                            onChange={(e) => setSelectedAlertMonth(Number(e.target.value))}
+                                            className="text-xs border rounded-md px-2 py-1 bg-white cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                        >
+                                            {MONTHS_FULL.map((m, i) => (
+                                                <option key={i} value={i}>{m}</option>
+                                            ))}
+                                        </select>
                                     </div>
                                     <div className={`flex items-center justify-between rounded-lg px-3 py-2 mb-2 ${revDiffMonth >= 0 ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
                                         <div>
@@ -1003,6 +1031,45 @@ export default function PLMatrix() {
                                     </thead>
                                     <tbody>
                                         {renderComparisonSection('INGRESOS DE EXPLOTACIÓN', 'revenue', REVENUE_STRUCTURE, 'bg-purple-100 text-purple-900', '')}
+                                        {/* Gastos de Explotación summary row in Comparison */}
+                                        {(() => {
+                                            const realGastosTotals = calcAllExpenses(realValues, 'real');
+                                            const budgetGastosTotals = calcAllExpenses(budgetValues, 'budget');
+                                            const realGastosAnnual = realGastosTotals.reduce((a, b) => a + b, 0);
+                                            const budgetGastosAnnual = budgetGastosTotals.reduce((a, b) => a + b, 0);
+                                            const diffAnnual = fmt(realGastosAnnual - budgetGastosAnnual);
+                                            const pctAnnual = budgetGastosAnnual !== 0 ? fmt(((realGastosAnnual - budgetGastosAnnual) / Math.abs(budgetGastosAnnual)) * 100) : null;
+                                            const diffColor = (d: number) => d <= 0 ? 'text-green-700' : 'text-red-600';
+                                            return (
+                                                <tr className="bg-red-100 text-red-900">
+                                                    <td colSpan={2} className="border border-red-300 px-2 py-1.5 font-bold text-xs">GASTOS DE EXPLOTACIÓN</td>
+                                                    {MONTHS.map((_, i) => {
+                                                        const r = realGastosTotals[i];
+                                                        const b = budgetGastosTotals[i];
+                                                        const diff = fmt(r - b);
+                                                        const pct = b !== 0 ? fmt(((r - b) / Math.abs(b)) * 100) : null;
+                                                        return (
+                                                            <td key={i} className="border border-red-300 px-1 py-1.5 text-right text-xs font-semibold">
+                                                                <div className="text-red-900 font-bold">{fmtDisplay(r)}</div>
+                                                                <div className="text-red-400 font-normal">{fmtDisplay(b)}</div>
+                                                                <div className={diffColor(diff)}>
+                                                                    {diff >= 0 ? '+' : ''}{fmtDisplay(diff)}
+                                                                    {pct !== null && <span className="ml-1 text-[10px]">({pct >= 0 ? '+' : ''}{pct}%)</span>}
+                                                                </div>
+                                                            </td>
+                                                        );
+                                                    })}
+                                                    <td className="border border-red-300 px-1 py-1.5 text-right text-xs font-bold">
+                                                        <div className="text-red-900">{fmtDisplay(realGastosAnnual)}</div>
+                                                        <div className="text-red-400 font-normal">{fmtDisplay(budgetGastosAnnual)}</div>
+                                                        <div className={diffColor(diffAnnual)}>
+                                                            {diffAnnual >= 0 ? '+' : ''}{fmtDisplay(diffAnnual)}
+                                                            {pctAnnual !== null && <span className="ml-1 text-[10px]">({pctAnnual >= 0 ? '+' : ''}{pctAnnual}%)</span>}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })()}
                                         {renderComparisonSection('Gastos de personal', 'personal', EXPENSE_STRUCTURE.personalItems, 'bg-orange-100 text-orange-900', '')}
                                         {renderComparisonSection('Comisiones', 'comisiones', EXPENSE_STRUCTURE.comisionesItems, 'bg-orange-50 text-orange-800', '')}
                                         {renderComparisonSection('Marketing', 'marketing', EXPENSE_STRUCTURE.marketingItems, 'bg-orange-50 text-orange-800', '')}
@@ -1036,6 +1103,73 @@ export default function PLMatrix() {
                                                 );
                                             })()}
                                         </tr>
+                                        {/* Ingresos financieros */}
+                                        <tr className="bg-green-50">
+                                            <td colSpan={2} className="border border-green-300 px-2 py-1.5 font-semibold text-green-900 text-xs">Ingresos financieros</td>
+                                            {realRevTotals.map((r, i) => {
+                                                const b = budgetRevTotals[i];
+                                                return (
+                                                    <td key={i} className="border border-green-200 px-1 py-1.5 text-right text-xs">
+                                                        <div className="text-green-900 font-semibold">{fmtDisplay(r)}</div>
+                                                        <div className="text-green-400">{fmtDisplay(b)}</div>
+                                                    </td>
+                                                );
+                                            })}
+                                            <td className="border border-green-200 px-1 py-1.5 text-right text-xs font-bold">
+                                                <div className="text-green-900">{fmtDisplay(realRevTotals.reduce((a, b) => a + b, 0))}</div>
+                                                <div className="text-green-400">{fmtDisplay(budgetRevTotals.reduce((a, b) => a + b, 0))}</div>
+                                            </td>
+                                        </tr>
+                                        {/* Gastos financieros */}
+                                        {(() => {
+                                            const realGT = calcAllExpenses(realValues, 'real');
+                                            const budgetGT = calcAllExpenses(budgetValues, 'budget');
+                                            return (
+                                                <tr className="bg-red-50">
+                                                    <td colSpan={2} className="border border-red-200 px-2 py-1.5 font-semibold text-red-900 text-xs">Gastos financieros</td>
+                                                    {realGT.map((r, i) => (
+                                                        <td key={i} className="border border-red-200 px-1 py-1.5 text-right text-xs">
+                                                            <div className="text-red-900 font-semibold">{fmtDisplay(r)}</div>
+                                                            <div className="text-red-400">{fmtDisplay(budgetGT[i])}</div>
+                                                        </td>
+                                                    ))}
+                                                    <td className="border border-red-200 px-1 py-1.5 text-right text-xs font-bold">
+                                                        <div className="text-red-900">{fmtDisplay(realGT.reduce((a, b) => a + b, 0))}</div>
+                                                        <div className="text-red-400">{fmtDisplay(budgetGT.reduce((a, b) => a + b, 0))}</div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })()}
+                                        {/* EBITDA % */}
+                                        <tr className="bg-indigo-50">
+                                            <td colSpan={2} className="border border-indigo-300 px-2 py-1.5 font-semibold text-indigo-900 text-xs">EBITDA %</td>
+                                            {realEbitda.map((r, i) => {
+                                                const revR = realRevTotals[i] || 0;
+                                                const revB = budgetRevTotals[i] || 0;
+                                                const pctR = revR !== 0 ? Math.round((r / revR) * 100) : 0;
+                                                const pctB = revB !== 0 ? Math.round((budgetEbitda[i] / revB) * 100) : 0;
+                                                return (
+                                                    <td key={i} className="border border-indigo-200 px-1 py-1.5 text-right text-xs">
+                                                        <div className={`font-semibold ${pctR >= 0 ? 'text-indigo-900' : 'text-red-600'}`}>{pctR}%</div>
+                                                        <div className="text-indigo-400">{pctB}%</div>
+                                                    </td>
+                                                );
+                                            })}
+                                            {(() => {
+                                                const rRevAnn = realRevTotals.reduce((a, b) => a + b, 0);
+                                                const bRevAnn = budgetRevTotals.reduce((a, b) => a + b, 0);
+                                                const rEbAnn = realEbitda.reduce((a, b) => a + b, 0);
+                                                const bEbAnn = budgetEbitda.reduce((a, b) => a + b, 0);
+                                                const pctR = rRevAnn !== 0 ? Math.round((rEbAnn / rRevAnn) * 100) : 0;
+                                                const pctB = bRevAnn !== 0 ? Math.round((bEbAnn / bRevAnn) * 100) : 0;
+                                                return (
+                                                    <td className="border border-indigo-200 px-1 py-1.5 text-right text-xs font-bold">
+                                                        <div className={pctR >= 0 ? 'text-indigo-900' : 'text-red-600'}>{pctR}%</div>
+                                                        <div className="text-indigo-400">{pctB}%</div>
+                                                    </td>
+                                                );
+                                            })()}
+                                        </tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -1058,10 +1192,16 @@ export default function PLMatrix() {
                         <tbody>
                             <tr className="bg-purple-100">
                                 <td colSpan={2} className="border border-purple-300 px-2 py-1.5 font-bold text-purple-900 text-xs">INGRESOS DE EXPLOTACIÓN</td>
-                                {ingresosTotals.map((val, i) => <td key={i} className="border border-purple-300 px-1 py-1.5 text-right font-semibold text-purple-800">{val || 0}</td>)}
-                                <td className="border border-purple-300 px-1 py-1.5 text-right font-bold text-purple-900">{ingresosAnual || 0}</td>
+                                {ingresosTotals.map((val, i) => <td key={i} className="border border-purple-300 px-1 py-1.5 text-right font-semibold text-purple-800">{fmtDisplay(val)}</td>)}
+                                <td className="border border-purple-300 px-1 py-1.5 text-right font-bold text-purple-900">{fmtDisplay(ingresosAnual)}</td>
                             </tr>
                             {renderRevenueRows()}
+                            {/* Gastos de Explotación — sum of all expense category subtotals */}
+                            <tr className="bg-red-100">
+                                <td colSpan={2} className="border border-red-300 px-2 py-1.5 font-bold text-red-900 text-xs">GASTOS DE EXPLOTACIÓN</td>
+                                {gastosTotals.map((val, i) => <td key={i} className="border border-red-300 px-1 py-1.5 text-right font-semibold text-red-800">{fmtDisplay(val)}</td>)}
+                                <td className="border border-red-300 px-1 py-1.5 text-right font-bold text-red-900">{fmtDisplay(gastosAnual)}</td>
+                            </tr>
                             {renderExpenseCategory('Gastos de personal', EXPENSE_STRUCTURE.personalItems, 'personal', 'bg-orange-100 text-orange-900')}
                             {renderExpenseCategory('Comisiones', EXPENSE_STRUCTURE.comisionesItems, 'comisiones')}
                             {renderExpenseCategory('Marketing', EXPENSE_STRUCTURE.marketingItems, 'marketing')}
@@ -1071,8 +1211,32 @@ export default function PLMatrix() {
                             {renderExpenseCategory('Gastos Operativos', EXPENSE_STRUCTURE.gastosOpItems, 'gastosOp')}
                             <tr className="bg-blue-100 sticky bottom-0 z-10 shadow-sm">
                                 <td colSpan={2} className="border border-blue-300 px-2 py-2 font-bold text-blue-900 text-sm">EBITDA</td>
-                                {ebitdaTotals.map((val, i) => <td key={i} className={`border border-blue-300 px-1 py-2 text-right font-bold text-sm ${val >= 0 ? 'text-blue-900' : 'text-red-600'}`}>{fmt(val)}</td>)}
-                                <td className={`border border-blue-300 px-1 py-2 text-right font-bold text-sm ${ebitdaAnual >= 0 ? 'text-blue-900' : 'text-red-600'}`}>{fmt(ebitdaAnual)}</td>
+                                {ebitdaTotals.map((val, i) => <td key={i} className={`border border-blue-300 px-1 py-2 text-right font-bold text-sm ${val >= 0 ? 'text-blue-900' : 'text-red-600'}`}>{fmtDisplay(val)}</td>)}
+                                <td className={`border border-blue-300 px-1 py-2 text-right font-bold text-sm ${ebitdaAnual >= 0 ? 'text-blue-900' : 'text-red-600'}`}>{fmtDisplay(ebitdaAnual)}</td>
+                            </tr>
+                            {/* Ingresos financieros */}
+                            <tr className="bg-green-50">
+                                <td colSpan={2} className="border border-green-300 px-2 py-1.5 font-semibold text-green-900 text-xs">Ingresos financieros</td>
+                                {ingresosTotals.map((val, i) => <td key={i} className="border border-green-200 px-1 py-1.5 text-right text-xs font-semibold text-green-800">{fmtDisplay(val)}</td>)}
+                                <td className="border border-green-200 px-1 py-1.5 text-right text-xs font-bold text-green-900">{fmtDisplay(ingresosAnual)}</td>
+                            </tr>
+                            {/* Gastos financieros */}
+                            <tr className="bg-red-50">
+                                <td colSpan={2} className="border border-red-200 px-2 py-1.5 font-semibold text-red-900 text-xs">Gastos financieros</td>
+                                {gastosTotals.map((val, i) => <td key={i} className="border border-red-200 px-1 py-1.5 text-right text-xs font-semibold text-red-800">{fmtDisplay(val)}</td>)}
+                                <td className="border border-red-200 px-1 py-1.5 text-right text-xs font-bold text-red-900">{fmtDisplay(gastosAnual)}</td>
+                            </tr>
+                            {/* EBITDA % */}
+                            <tr className="bg-indigo-50">
+                                <td colSpan={2} className="border border-indigo-300 px-2 py-1.5 font-semibold text-indigo-900 text-xs">EBITDA %</td>
+                                {ebitdaTotals.map((val, i) => {
+                                    const rev = ingresosTotals[i] || 0;
+                                    const pct = rev !== 0 ? Math.round((val / rev) * 100) : 0;
+                                    return <td key={i} className={`border border-indigo-200 px-1 py-1.5 text-right text-xs font-semibold ${pct >= 0 ? 'text-indigo-800' : 'text-red-600'}`}>{pct}%</td>;
+                                })}
+                                <td className={`border border-indigo-200 px-1 py-1.5 text-right text-xs font-bold ${ingresosAnual !== 0 ? (ebitdaAnual / ingresosAnual >= 0 ? 'text-indigo-900' : 'text-red-600') : 'text-indigo-900'}`}>
+                                    {ingresosAnual !== 0 ? Math.round((ebitdaAnual / ingresosAnual) * 100) : 0}%
+                                </td>
                             </tr>
                         </tbody>
                     </table>

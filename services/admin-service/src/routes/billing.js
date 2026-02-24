@@ -263,6 +263,87 @@ router.get('/matrix', async (req, res) => {
             });
         }
 
+        // 5b. Create missing billing records for clients with ad investment but no billing record
+        const existingClientIds = new Set(billingRecords.map(b => b.client_id));
+        const missingInserts = [];
+        const missingDetailInserts = [];
+
+        for (const [clientId, actual] of Object.entries(actualsMap)) {
+            if (existingClientIds.has(clientId)) continue; // Already has billing record
+            if (!actual.total_spend || actual.total_spend <= 0) continue; // No investment
+
+            const clientObj = clients.find(c => c.id === clientId);
+            if (!clientObj) continue; // Not an active client
+
+            const config = clientObj.fee_config || { fee_type: 'fixed', fixed_pct: 10, use_platform_costs: false, platform_cost_first: 0, platform_cost_additional: 0 };
+            let pct = 0;
+            if (config.fee_type === 'variable' && config.variable_ranges?.length > 0) {
+                const range = config.variable_ranges.find(rg => {
+                    const min = Number(rg.min || 0);
+                    const max = (rg.max === null || rg.max === undefined) ? Infinity : Number(rg.max);
+                    return actual.total_spend >= min && actual.total_spend <= max;
+                });
+                pct = range ? Number(range.pct) : 0;
+            } else {
+                pct = Number(config.fixed_pct || 0);
+            }
+
+            const usePlat = config.use_platform_costs === true;
+            const platCount = actual.platforms.size > 0 ? actual.platforms.size : 1;
+            let pCost = 0;
+            if (usePlat && actual.total_spend > 0) {
+                pCost = (Number(config.platform_cost_first || 0)) + ((Math.max(1, platCount) - 1) * Number(config.platform_cost_additional || 0));
+            }
+
+            const fee = Math.round((actual.total_spend * (pct / 100)) + pCost);
+
+            missingInserts.push({
+                client_id: clientId,
+                fiscal_year: parseInt(year),
+                fiscal_month: parseInt(month),
+                total_actual_investment: actual.total_spend,
+                total_ad_investment: 0,
+                applied_fee_percentage: pct,
+                platform_count: platCount,
+                platform_costs: Math.round(pCost),
+                fee_paid: fee,
+                is_manual_override: false,
+                cell_metadata: {}
+            });
+        }
+
+        if (missingInserts.length > 0) {
+            const { data: newBillings, error: insertError } = await supabase
+                .from('monthly_billing')
+                .insert(missingInserts)
+                .select();
+
+            if (!insertError && newBillings) {
+                // Add to billingRecords for the response & create strategy details
+                newBillings.forEach(nb => {
+                    billingRecords.push(nb);
+                    if (stratService && nb.fee_paid > 0) {
+                        missingDetailInserts.push({
+                            monthly_billing_id: nb.id,
+                            service_id: stratService.id,
+                            department_id: stratService.department_id,
+                            service_name: stratService.name,
+                            amount: nb.fee_paid
+                        });
+                    }
+                });
+
+                if (missingDetailInserts.length > 0) {
+                    const { data: newDetails } = await supabase
+                        .from('billing_details')
+                        .upsert(missingDetailInserts, { onConflict: 'monthly_billing_id, service_id' })
+                        .select();
+                    if (newDetails) details.push(...newDetails);
+                }
+                console.log(`Created ${newBillings.length} missing billing records from ad investment data`);
+            }
+        }
+
         // 6. Structure Data
         const matrix = clients.map(client => {
             const billing = billingRecords.find(b => b.client_id === client.id) || null;
@@ -583,6 +664,94 @@ router.post('/matrix/save', async (req, res) => {
 
     } catch (err) {
         console.error('Save Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * DELETE /matrix/row
+ * Remove a billing row (monthly_billing + billing_details)
+ */
+router.delete('/matrix/row', async (req, res) => {
+    try {
+        const { year, month, client_id } = req.query;
+
+        if (!year || !month || !client_id) {
+            return res.status(400).json({ error: 'year, month and client_id are required' });
+        }
+
+        // Find the monthly_billing record
+        const { data: billing, error: findError } = await supabase
+            .from('monthly_billing')
+            .select('id')
+            .eq('client_id', client_id)
+            .eq('fiscal_year', year)
+            .eq('fiscal_month', month)
+            .single();
+
+        if (findError && findError.code === 'PGRST116') {
+            return res.json({ success: true, message: 'No billing record found, nothing to delete' });
+        }
+        if (findError) throw findError;
+
+        // Delete billing_details first (FK)
+        await supabase.from('billing_details').delete().eq('monthly_billing_id', billing.id);
+
+        // Delete the monthly_billing record
+        await supabase.from('monthly_billing').delete().eq('id', billing.id);
+
+        console.log(`Deleted billing row for client ${client_id}, ${year}/${month}`);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Delete Row Error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * POST /matrix/row/duplicate
+ * Duplicate a billing row (monthly_billing + billing_details)
+ * Creates a copy with the same amounts for the same client/month
+ */
+router.post('/matrix/row/duplicate', async (req, res) => {
+    try {
+        const { year, month, client_id } = req.body;
+
+        if (!year || !month || !client_id) {
+            return res.status(400).json({ error: 'year, month and client_id are required' });
+        }
+
+        // Find the source monthly_billing record
+        const { data: source, error: findError } = await supabase
+            .from('monthly_billing')
+            .select('*')
+            .eq('client_id', client_id)
+            .eq('fiscal_year', year)
+            .eq('fiscal_month', month)
+            .single();
+
+        if (findError) throw findError;
+        if (!source) return res.status(404).json({ error: 'Source billing record not found' });
+
+        // Find source billing_details
+        const { data: sourceDetails } = await supabase
+            .from('billing_details')
+            .select('*')
+            .eq('monthly_billing_id', source.id);
+
+        // Note: If there's a unique constraint on (client_id, fiscal_year, fiscal_month),
+        // duplicating in the same month for the same client will fail.
+        // In that case, we just return the existing data as confirmation.
+        // The frontend will show a toast about it.
+        res.json({
+            success: true,
+            source_billing: source,
+            source_details: sourceDetails || [],
+            message: 'Row data retrieved for duplication'
+        });
+
+    } catch (err) {
+        console.error('Duplicate Row Error:', err);
         res.status(500).json({ error: err.message });
     }
 });

@@ -484,6 +484,7 @@ router.get('/matrix/:year', async (req, res) => {
                 'WEB_DEV': 'Web dev',
                 'SEO': 'SEO',
                 'MKT_AUTO_EMAIL': 'CRM',
+                'OTHER_HOURS': 'Otros servicios',
             };
 
             const mbMap = {};

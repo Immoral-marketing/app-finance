@@ -187,6 +187,26 @@ export function AIChatWidget({ userRole, deptCode, year, currentUser }: ChatHubP
     const currentYear = year || new Date().getFullYear();
     const totalBadge = msgUnread + notifUnread;
 
+    // ── Dynamic collapse: button hides on scroll ────────────────────
+    const [isCollapsed, setIsCollapsed] = useState(false);
+    const collapseTimerRef = useRef<any>(null);
+    const scrollTimerRef = useRef<any>(null);
+
+    useEffect(() => {
+        const handleScroll = () => {
+            if (isOpen) return; // Don't collapse while chat is open
+            setIsCollapsed(true);
+            if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+            // Show button again after 2s of no scrolling
+            scrollTimerRef.current = setTimeout(() => setIsCollapsed(false), 2000);
+        };
+        window.addEventListener('scroll', handleScroll, true); // capture phase to catch scrollable containers
+        return () => {
+            window.removeEventListener('scroll', handleScroll, true);
+            if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+        };
+    }, [isOpen]);
+
     // ── Scroll automático ───────────────────────────────────────────
     useEffect(() => { aiEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [aiMessages]);
     useEffect(() => { userEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [userMessages]);
@@ -395,21 +415,45 @@ export function AIChatWidget({ userRole, deptCode, year, currentUser }: ChatHubP
     // ── Render ──────────────────────────────────────────────────────
     return (
         <>
-            {/* ── Botón flotante ── */}
+            {/* ── Botón flotante dinámico ── */}
             {!isOpen && (
-                <button
-                    onClick={() => { setIsOpen(true); setPanel('home'); }}
-                    className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-2xl flex items-center justify-center hover:scale-110 transition-all duration-200"
-                    title="Comunicaciones"
+                <div
+                    className="fixed bottom-0 right-0 z-50"
+                    onMouseEnter={() => {
+                        if (collapseTimerRef.current) clearTimeout(collapseTimerRef.current);
+                        setIsCollapsed(false);
+                    }}
+                    onMouseLeave={() => {
+                        collapseTimerRef.current = window.setTimeout(() => setIsCollapsed(true), 2500);
+                    }}
                 >
-                    <MessageSquare className="w-6 h-6" />
-                    {totalBadge > 0 && (
-                        <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 bg-red-500 rounded-full border-2 border-white text-[10px] font-bold flex items-center justify-center px-1 animate-pulse">
-                            {totalBadge > 9 ? '9+' : totalBadge}
-                        </span>
+                    {isCollapsed ? (
+                        /* Collapsed: thin strip on right edge */
+                        <div className="w-[6px] h-20 mb-4 rounded-l-md bg-gradient-to-b from-blue-500 to-indigo-600 shadow-lg cursor-pointer relative hover:w-3 transition-all duration-200">
+                            {totalBadge > 0 && (
+                                <span className="absolute -top-2 -left-4 min-w-[18px] h-[18px] bg-red-500 rounded-full border-2 border-white text-[9px] font-bold flex items-center justify-center px-0.5 animate-pulse text-white shadow-sm">
+                                    {totalBadge > 9 ? '9+' : totalBadge}
+                                </span>
+                            )}
+                            <span className="absolute bottom-1 -left-1 w-2.5 h-2.5 bg-green-400 rounded-full border-2 border-white" />
+                        </div>
+                    ) : (
+                        /* Expanded: full round button */
+                        <button
+                            onClick={() => { setIsOpen(true); setPanel('home'); }}
+                            className="mb-6 mr-6 w-14 h-14 rounded-full bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-2xl flex items-center justify-center hover:scale-110 transition-all duration-200 relative"
+                            title="Comunicaciones"
+                        >
+                            <MessageSquare className="w-6 h-6" />
+                            {totalBadge > 0 && (
+                                <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 bg-red-500 rounded-full border-2 border-white text-[10px] font-bold flex items-center justify-center px-1 animate-pulse">
+                                    {totalBadge > 9 ? '9+' : totalBadge}
+                                </span>
+                            )}
+                            <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-400 rounded-full border-2 border-white" />
+                        </button>
                     )}
-                    <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-400 rounded-full border-2 border-white" />
-                </button>
+                </div>
             )}
 
             {/* ── Panel principal ── */}

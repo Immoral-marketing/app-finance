@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/lib/api/admin';
 import { Button } from '@/components/ui/Button';
-import { Download, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, MessageSquare } from 'lucide-react';
+import { Download, TrendingUp, TrendingDown, AlertTriangle, CheckCircle2, MessageSquare, Calendar } from 'lucide-react';
 import {
     BarChart, Bar, LineChart, Line, AreaChart, Area,
     XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -89,6 +89,18 @@ const EXPENSE_STRUCTURE = {
     ]
 };
 
+// Map expense structure keys (same as Dashboard.tsx)
+const EXPENSE_KEY_MAP: Record<string, { dept: string; items: string[] }[]> = {
+    personal: EXPENSE_STRUCTURE.personalItems,
+    comisiones: EXPENSE_STRUCTURE.comisionesItems,
+    marketing: EXPENSE_STRUCTURE.marketingItems,
+    formacion: EXPENSE_STRUCTURE.formacionItems,
+    software: EXPENSE_STRUCTURE.softwareItems,
+    gastosOp: EXPENSE_STRUCTURE.gastosOpItems,
+    adspent: EXPENSE_STRUCTURE.adspentItems,
+};
+const ALL_EXPENSE_KEYS = Object.keys(EXPENSE_KEY_MAP);
+
 // Filter a structure array by department names
 function filterByDept(
     items: { dept: string; items?: string[]; services?: string[] }[],
@@ -110,6 +122,7 @@ export default function DepartmentPL() {
 
     const [year, setYear] = useState(new Date().getFullYear());
     const [activeTab, setActiveTab] = useState<TabType>('Dashboard');
+    const [bannerMonth, setBannerMonth] = useState<number | 'ytd'>('ytd');
     const [cellValues, setCellValues] = useState<Record<string, number>>({});
     const queryClient = useQueryClient();
     const hoverTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -641,20 +654,23 @@ export default function DepartmentPL() {
             totalGeneralRevenue[i] > 0 ? fmtCurrency((v / totalGeneralRevenue[i]) * 100) : 0
         );
 
-        // === Immoral gastosOp total per month (general company expenses) ===
-        const immoralGastosOp = EXPENSE_STRUCTURE.gastosOpItems;
-        const gastosGeneralesMonthly = Array(12).fill(0);
-        immoralGastosOp.forEach(group => {
-            group.items.forEach(item => {
-                for (let i = 0; i < 12; i++) {
-                    gastosGeneralesMonthly[i] += getCompValue(compRealValues, 'gastosOp', group.dept, item, i);
-                }
+        // === ALL Immoral expenses per month (for Group % distribution — same logic as Dashboard cards) ===
+        const immoralExpensesMonthly = Array(12).fill(0);
+        ALL_EXPENSE_KEYS.forEach(catKey => {
+            const items = EXPENSE_KEY_MAP[catKey] || [];
+            items.filter(g => g.dept === 'Immoral').forEach(g => {
+                g.items.forEach(item => {
+                    for (let i = 0; i < 12; i++) {
+                        immoralExpensesMonthly[i] += getCompValue(compRealValues, catKey, 'Immoral', item, i);
+                    }
+                });
             });
         });
 
-        // === Group cost = gastosGenerales * Group% ===
+        // === Group cost = ALL Immoral expenses * Group% (per month) ===
+        const isImmoral = deptNames.includes('Immoral');
         const groupCostMonthly = groupPct.map((pct, i) =>
-            fmtCurrency(gastosGeneralesMonthly[i] * (pct / 100))
+            isImmoral ? 0 : fmtCurrency(immoralExpensesMonthly[i] * (pct / 100))
         );
 
         // Calculate each expense category monthly
@@ -682,6 +698,9 @@ export default function DepartmentPL() {
 
         // Current month index (0-indexed)
         const currentMonth = new Date().getMonth();
+
+        // Determine the effective month range based on the banner month selector
+        const bannerEndMonth = bannerMonth === 'ytd' ? currentMonth : (bannerMonth as number);
 
         // --- Chart Data ---
         const MONTH_SHORT = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -715,7 +734,7 @@ export default function DepartmentPL() {
 
         // 4) Budget alert: compare real vs budget for recent months
         const alertMonths: { month: string; idx: number; realResult: number; budgetResult: number; diff: number; pct: number }[] = [];
-        for (let i = 0; i <= currentMonth; i++) {
+        for (let i = 0; i <= bannerEndMonth; i++) {
             const realRes = resultadoMonthly[i];
             const budgetRes = budgetResultadoMonthly[i];
             const diff = fmtCurrency(realRes - budgetRes);
@@ -730,63 +749,161 @@ export default function DepartmentPL() {
             });
         }
 
-        // Overall YTD performance
-        const ytdReal = resultadoMonthly.slice(0, currentMonth + 1).reduce((a, b) => a + b, 0);
-        const ytdBudget = budgetResultadoMonthly.slice(0, currentMonth + 1).reduce((a, b) => a + b, 0);
-        const ytdDiff = fmtCurrency(ytdReal - ytdBudget);
-        const ytdPct = ytdBudget !== 0 ? fmtCurrency((ytdDiff / Math.abs(ytdBudget)) * 100) : 0;
-        const isPositive = ytdDiff >= 0;
+        // === SEPARATE budget comparisons for banner ===
+        // Revenue: real vs budget
+        const ytdRevReal = revTotals.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdRevBudget = budgetRevTotals.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdRevDiff = fmtCurrency(ytdRevReal - ytdRevBudget);
+        const ytdRevPct = ytdRevBudget !== 0 ? fmtCurrency((ytdRevDiff / Math.abs(ytdRevBudget)) * 100) : 0;
+        const revOk = ytdRevDiff >= 0;
 
-        // Custom tooltip formatter
+        // Expenses: real vs budget (for expenses, LOWER is better)
+        const ytdExpReal = totalExpWithGroup.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdExpBudget = budgetExpMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdExpDiff = fmtCurrency(ytdExpReal - ytdExpBudget);
+        const ytdExpPct = ytdExpBudget !== 0 ? fmtCurrency((ytdExpDiff / Math.abs(ytdExpBudget)) * 100) : 0;
+        const expOk = ytdExpDiff <= 0; // expenses below budget = good
+
+        // Net result
+        const ytdResultReal = resultadoMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdResultBudget = budgetResultadoMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdResultDiff = fmtCurrency(ytdResultReal - ytdResultBudget);
+        const resultOk = ytdResultDiff >= 0;
+
+        const bannerPeriodLabel = bannerMonth === 'ytd' ? 'YTD' : MONTHS[bannerMonth as number];
+
         // Custom tooltip formatter
         const currencyFormatter = (value: any) =>
             Math.round(Number(value || 0)).toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €';
 
         return (
             <div className="space-y-6 px-4 pb-6 pt-4">
-                {/* === BUDGET ALERT BANNER === */}
-                <div className={`rounded-xl border-2 p-4 ${isPositive
-                    ? 'bg-gradient-to-r from-emerald-50 to-green-50 border-emerald-200'
-                    : 'bg-gradient-to-r from-red-50 to-orange-50 border-red-200'
-                    }`}>
-                    <div className="flex items-center gap-3 mb-3">
-                        {isPositive ? (
-                            <CheckCircle2 className="h-6 w-6 text-emerald-600" />
-                        ) : (
-                            <AlertTriangle className="h-6 w-6 text-red-500" />
-                        )}
-                        <div>
-                            <h3 className={`font-bold text-base ${isPositive ? 'text-emerald-800' : 'text-red-800'}`}>
-                                {isPositive ? '✅ Rendimiento por encima del presupuesto' : '⚠️ Rendimiento por debajo del presupuesto'}
-                            </h3>
-                            <p className={`text-sm ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
-                                Acumulado YTD: <strong>{fmtDisplay(ytdDiff)} €</strong> ({ytdPct > 0 ? '+' : ''}{ytdPct}%) vs presupuesto
-                            </p>
+                {/* === BUDGET ALERT BANNER — 3 panels === */}
+                <div className="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                    {/* Header with month selector */}
+                    <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-200">
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-gray-800">📊 Rendimiento vs Presupuesto</span>
+                            <span className="text-xs text-gray-400">({bannerPeriodLabel})</span>
                         </div>
-                        <div className="ml-auto flex items-center gap-2">
-                            {isPositive ? <TrendingUp className="h-8 w-8 text-emerald-500" /> : <TrendingDown className="h-8 w-8 text-red-400" />}
+                        <div className="flex items-center gap-1.5">
+                            <Calendar size={14} className="text-gray-400" />
+                            <select
+                                value={bannerMonth === 'ytd' ? 'ytd' : bannerMonth}
+                                onChange={(e) => setBannerMonth(e.target.value === 'ytd' ? 'ytd' : Number(e.target.value))}
+                                className="text-xs font-medium rounded-lg px-2 py-1.5 border border-gray-200 bg-white text-gray-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                            >
+                                <option value="ytd">Acumulado (YTD)</option>
+                                {MONTHS.map((m, i) => (
+                                    <option key={i} value={i}>{m}</option>
+                                ))}
+                            </select>
+                        </div>
+                    </div>
+
+                    {/* 3-panel grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+                        {/* Ingresos vs Presupuesto */}
+                        <div className={`p-4 ${revOk ? 'bg-emerald-50/50' : 'bg-red-50/40'}`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {revOk ? <TrendingUp size={16} className="text-emerald-600" /> : <TrendingDown size={16} className="text-red-500" />}
+                                <span className="text-xs font-bold text-gray-700">Ingresos</span>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Real</span>
+                                    <span className="font-bold text-gray-900">{fmtDisplay(ytdRevReal)} €</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Presupuesto</span>
+                                    <span className="font-medium text-gray-600">{fmtDisplay(ytdRevBudget)} €</span>
+                                </div>
+                                <div className={`flex justify-between text-xs pt-1 border-t ${revOk ? 'border-emerald-200' : 'border-red-200'}`}>
+                                    <span className={`font-bold ${revOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {revOk ? '✅ Por encima' : '⚠️ Por debajo'}
+                                    </span>
+                                    <span className={`font-bold ${revOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {ytdRevDiff > 0 ? '+' : ''}{fmtDisplay(ytdRevDiff)} € ({ytdRevPct > 0 ? '+' : ''}{ytdRevPct}%)
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Gastos vs Presupuesto */}
+                        <div className={`p-4 ${expOk ? 'bg-emerald-50/50' : 'bg-red-50/40'}`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {expOk ? <CheckCircle2 size={16} className="text-emerald-600" /> : <AlertTriangle size={16} className="text-red-500" />}
+                                <span className="text-xs font-bold text-gray-700">Gastos</span>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Real</span>
+                                    <span className="font-bold text-gray-900">{fmtDisplay(ytdExpReal)} €</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Presupuesto</span>
+                                    <span className="font-medium text-gray-600">{fmtDisplay(ytdExpBudget)} €</span>
+                                </div>
+                                <div className={`flex justify-between text-xs pt-1 border-t ${expOk ? 'border-emerald-200' : 'border-red-200'}`}>
+                                    <span className={`font-bold ${expOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {expOk ? '✅ Dentro del presupuesto' : '🚨 Exceden presupuesto'}
+                                    </span>
+                                    <span className={`font-bold ${expOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {ytdExpDiff > 0 ? '+' : ''}{fmtDisplay(ytdExpDiff)} € ({ytdExpPct > 0 ? '+' : ''}{ytdExpPct}%)
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Resultado Neto */}
+                        <div className={`p-4 ${resultOk ? 'bg-emerald-50/70' : 'bg-red-50/60'}`}>
+                            <div className="flex items-center gap-2 mb-2">
+                                {resultOk ? <TrendingUp size={16} className="text-emerald-600" /> : <TrendingDown size={16} className="text-red-500" />}
+                                <span className="text-xs font-bold text-gray-700">Resultado Neto</span>
+                            </div>
+                            <div className="space-y-1">
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Real</span>
+                                    <span className={`font-bold ${ytdResultReal >= 0 ? 'text-green-700' : 'text-red-700'}`}>{fmtDisplay(ytdResultReal)} €</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">Presupuesto</span>
+                                    <span className="font-medium text-gray-600">{fmtDisplay(ytdResultBudget)} €</span>
+                                </div>
+                                <div className={`flex justify-between text-xs pt-1 border-t ${resultOk ? 'border-emerald-200' : 'border-red-200'}`}>
+                                    <span className={`font-bold ${resultOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {resultOk ? '✅ Positivo' : '⚠️ Negativo'}
+                                    </span>
+                                    <span className={`font-bold ${resultOk ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {ytdResultDiff > 0 ? '+' : ''}{fmtDisplay(ytdResultDiff)} €
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
                     {/* Monthly chips */}
-                    <div className="flex gap-1.5 flex-wrap">
-                        {alertMonths.map(am => {
-                            const ok = am.diff >= 0;
-                            return (
-                                <div
-                                    key={am.idx}
-                                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${ok
-                                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                        : 'bg-red-100 text-red-800 border border-red-200'
-                                        }`}
-                                    title={`Real: ${fmtDisplay(am.realResult)} € | Presup: ${fmtDisplay(am.budgetResult)} € | Dif: ${fmtDisplay(am.diff)} €`}
-                                >
-                                    {ok ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
-                                    {am.month.slice(0, 3)}
-                                    <span className="font-bold">{am.diff > 0 ? '+' : ''}{fmtDisplay(am.diff)}</span>
-                                </div>
-                            );
-                        })}
+                    <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/50">
+                        <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-2">Detalle por mes (resultado neto vs presupuesto)</p>
+                        <div className="flex gap-1.5 flex-wrap">
+                            {alertMonths.map(am => {
+                                const ok = am.diff >= 0;
+                                return (
+                                    <div
+                                        key={am.idx}
+                                        className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${ok
+                                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                            : 'bg-red-100 text-red-800 border border-red-200'
+                                            }`}
+                                        title={`Real: ${fmtDisplay(am.realResult)} € | Presup: ${fmtDisplay(am.budgetResult)} € | Dif: ${fmtDisplay(am.diff)} €`}
+                                    >
+                                        {ok ? <CheckCircle2 size={10} /> : <AlertTriangle size={10} />}
+                                        {am.month.slice(0, 3)}
+                                        <span className="font-bold">{am.diff > 0 ? '+' : ''}{fmtDisplay(am.diff)}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
 
@@ -897,10 +1014,10 @@ export default function DepartmentPL() {
                                 {/* Spacer */}
                                 <tr><td colSpan={14} className="py-1 bg-white border-0"></td></tr>
 
-                                {/* Resultado */}
+                                {/* EBITDA (= Resultado before financial items) */}
                                 <tr className="bg-green-100">
                                     <td className="border border-green-400 px-2 py-2 font-bold text-green-900 text-sm">
-                                        Resultado
+                                        EBITDA
                                     </td>
                                     {resultadoMonthly.map((val, i) => (
                                         <td key={i} className={`border border-green-400 px-1 py-2 text-right font-bold tabular-nums ${val >= 0 ? 'text-green-800' : 'text-red-600'}`}>
@@ -908,6 +1025,75 @@ export default function DepartmentPL() {
                                         </td>
                                     ))}
                                     <td className={`border border-green-400 px-1 py-2 text-right font-bold text-sm tabular-nums ${resultadoAnual >= 0 ? 'text-green-900' : 'text-red-600'}`}>
+                                        {fmtDisplay(resultadoAnual)}
+                                    </td>
+                                </tr>
+
+                                {/* EBITDA % */}
+                                <tr className="bg-green-50">
+                                    <td className="border border-green-300 px-2 py-1.5 text-xs font-semibold text-green-800">
+                                        EBITDA %
+                                    </td>
+                                    {resultadoMonthly.map((val, i) => {
+                                        const pct = revTotals[i] > 0 ? (val / revTotals[i]) * 100 : 0;
+                                        return (
+                                            <td key={i} className={`border border-green-300 px-1 py-1.5 text-right text-xs font-medium tabular-nums ${pct >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                                                {pct !== 0 ? `${pct.toFixed(1)}%` : <span className="text-gray-300">—</span>}
+                                            </td>
+                                        );
+                                    })}
+                                    <td className={`border border-green-300 px-1 py-1.5 text-right text-xs font-bold bg-green-100 tabular-nums ${revAnual > 0 && resultadoAnual >= 0 ? 'text-green-800' : 'text-red-600'}`}>
+                                        {revAnual > 0 ? `${((resultadoAnual / revAnual) * 100).toFixed(1)}%` : '—'}
+                                    </td>
+                                </tr>
+
+                                {/* Spacer */}
+                                <tr><td colSpan={14} className="py-1 bg-white border-0"></td></tr>
+
+                                {/* Ingresos financieros = total facturación del departamento */}
+                                <tr className="bg-emerald-50/60 hover:bg-emerald-50">
+                                    <td className="border border-emerald-200 px-2 py-1.5 text-xs font-semibold text-emerald-800">
+                                        Ingresos financieros
+                                    </td>
+                                    {revTotals.map((val, i) => (
+                                        <td key={i} className={`border border-emerald-200 px-1 py-1.5 text-right text-xs font-medium tabular-nums ${val > 0 ? 'text-emerald-700' : 'text-gray-300'}`}>
+                                            {val > 0 ? fmtDisplay(val) : '0'}
+                                        </td>
+                                    ))}
+                                    <td className="border border-emerald-200 px-1 py-1.5 text-right text-xs font-bold text-emerald-800 bg-emerald-100 tabular-nums">
+                                        {fmtDisplay(revAnual)}
+                                    </td>
+                                </tr>
+
+                                {/* Gastos financieros = total gastos del departamento */}
+                                <tr className="bg-red-50/60 hover:bg-red-50">
+                                    <td className="border border-red-200 px-2 py-1.5 text-xs font-semibold text-red-800">
+                                        Gastos financieros
+                                    </td>
+                                    {totalExpWithGroup.map((val, i) => (
+                                        <td key={i} className={`border border-red-200 px-1 py-1.5 text-right text-xs font-medium tabular-nums ${val > 0 ? 'text-red-700' : 'text-gray-300'}`}>
+                                            {val > 0 ? fmtDisplay(val) : '0'}
+                                        </td>
+                                    ))}
+                                    <td className="border border-red-200 px-1 py-1.5 text-right text-xs font-bold text-red-800 bg-red-100 tabular-nums">
+                                        {fmtDisplay(fmtCurrency(totalExpWithGroup.reduce((a, b) => a + b, 0)))}
+                                    </td>
+                                </tr>
+
+                                {/* Spacer */}
+                                <tr><td colSpan={14} className="py-1 bg-white border-0"></td></tr>
+
+                                {/* Resultado Final */}
+                                <tr className="bg-blue-100">
+                                    <td className="border border-blue-400 px-2 py-2 font-bold text-blue-900 text-sm">
+                                        Resultado Final
+                                    </td>
+                                    {resultadoMonthly.map((val, i) => (
+                                        <td key={i} className={`border border-blue-400 px-1 py-2 text-right font-bold tabular-nums ${val >= 0 ? 'text-blue-800' : 'text-red-600'}`}>
+                                            {fmtDisplay(val)}
+                                        </td>
+                                    ))}
+                                    <td className={`border border-blue-400 px-1 py-2 text-right font-bold text-sm tabular-nums ${resultadoAnual >= 0 ? 'text-blue-900' : 'text-red-600'}`}>
                                         {fmtDisplay(resultadoAnual)}
                                     </td>
                                 </tr>
