@@ -46,6 +46,7 @@ const EXPENSE_STRUCTURE = {
         { dept: 'Imfashion', items: ['Gemelos'] },
         { dept: 'Imsales', items: ['Jorge'] },
         { dept: 'Imfilms', items: ['Olga'] },
+        { dept: 'Immoralia', items: ['David'] },
     ],
     marketingItems: [
         { dept: 'Imfilms', items: ['Marketing'] },

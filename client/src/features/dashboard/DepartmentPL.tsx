@@ -55,6 +55,7 @@ const EXPENSE_STRUCTURE = {
         { dept: 'Imfashion', items: ['Gemelos'] },
         { dept: 'Imsales', items: ['Jorge'] },
         { dept: 'Imfilms', items: ['Olga'] },
+        { dept: 'Immoralia', items: ['David'] },
     ],
     marketingItems: [
         { dept: 'Imfilms', items: ['Marketing'] },
@@ -734,7 +735,9 @@ export default function DepartmentPL() {
 
         // 4) Budget alert: compare real vs budget for recent months
         const alertMonths: { month: string; idx: number; realResult: number; budgetResult: number; diff: number; pct: number }[] = [];
-        for (let i = 0; i <= bannerEndMonth; i++) {
+        const alertStart = bannerMonth === 'ytd' ? 0 : (bannerMonth as number);
+        const alertEnd = bannerEndMonth;
+        for (let i = alertStart; i <= alertEnd; i++) {
             const realRes = resultadoMonthly[i];
             const budgetRes = budgetResultadoMonthly[i];
             const diff = fmtCurrency(realRes - budgetRes);
@@ -750,23 +753,38 @@ export default function DepartmentPL() {
         }
 
         // === SEPARATE budget comparisons for banner ===
+        const isSingleMonth = bannerMonth !== 'ytd';
+        const singleMonthIdx = bannerMonth as number;
+
         // Revenue: real vs budget
-        const ytdRevReal = revTotals.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
-        const ytdRevBudget = budgetRevTotals.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdRevReal = isSingleMonth
+            ? revTotals[singleMonthIdx] || 0
+            : revTotals.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdRevBudget = isSingleMonth
+            ? budgetRevTotals[singleMonthIdx] || 0
+            : budgetRevTotals.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
         const ytdRevDiff = fmtCurrency(ytdRevReal - ytdRevBudget);
         const ytdRevPct = ytdRevBudget !== 0 ? fmtCurrency((ytdRevDiff / Math.abs(ytdRevBudget)) * 100) : 0;
         const revOk = ytdRevDiff >= 0;
 
         // Expenses: real vs budget (for expenses, LOWER is better)
-        const ytdExpReal = totalExpWithGroup.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
-        const ytdExpBudget = budgetExpMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdExpReal = isSingleMonth
+            ? totalExpWithGroup[singleMonthIdx] || 0
+            : totalExpWithGroup.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdExpBudget = isSingleMonth
+            ? budgetExpMonthly[singleMonthIdx] || 0
+            : budgetExpMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
         const ytdExpDiff = fmtCurrency(ytdExpReal - ytdExpBudget);
         const ytdExpPct = ytdExpBudget !== 0 ? fmtCurrency((ytdExpDiff / Math.abs(ytdExpBudget)) * 100) : 0;
         const expOk = ytdExpDiff <= 0; // expenses below budget = good
 
         // Net result
-        const ytdResultReal = resultadoMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
-        const ytdResultBudget = budgetResultadoMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdResultReal = isSingleMonth
+            ? resultadoMonthly[singleMonthIdx] || 0
+            : resultadoMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
+        const ytdResultBudget = isSingleMonth
+            ? budgetResultadoMonthly[singleMonthIdx] || 0
+            : budgetResultadoMonthly.slice(0, bannerEndMonth + 1).reduce((a, b) => a + b, 0);
         const ytdResultDiff = fmtCurrency(ytdResultReal - ytdResultBudget);
         const resultOk = ytdResultDiff >= 0;
 

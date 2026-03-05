@@ -64,6 +64,7 @@ const EXPENSE_STRUCTURE = {
         { dept: 'Imfashion', items: ['Gemelos'] },
         { dept: 'Imsales', items: ['Jorge'] },
         { dept: 'Imfilms', items: ['Olga'] },
+        { dept: 'Immoralia', items: ['David'] },
     ],
     marketingItems: [
         { dept: 'Imfilms', items: ['Marketing'] },
@@ -685,111 +686,106 @@ export default function Dashboard() {
                                             return true;
                                         })
                                         .sort((a, b) => b.income - a.income)
-                                        .map(dept => (
-                                            <Card key={dept.key} className="hover:shadow-md transition-shadow">
-                                                <CardHeader className="pb-2">
-                                                    <CardTitle className="text-base font-bold flex justify-between items-center">
-                                                        {dept.name}
-                                                        <span className={`text-sm font-normal px-2 py-1 rounded-full ${dept.margin >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                                            {dept.marginPct.toFixed(1)}% margen
-                                                        </span>
-                                                    </CardTitle>
-                                                </CardHeader>
-                                                <CardContent>
-                                                    <div className="space-y-4">
-                                                        {/* Facturación */}
-                                                        <div className="flex justify-between items-center border-b pb-2">
-                                                            <span className="text-sm font-medium text-gray-500">Facturación</span>
-                                                            <span className="text-lg font-bold text-gray-900">{formatCurrency(dept.income)}</span>
-                                                        </div>
+                                        .map(dept => {
+                                            // Compute dynamic margin based on Group % toggle
+                                            const isVertical = VERTICAL_DEPTS.includes(dept.name);
+                                            const isImmoral = dept.key === 'Immoral';
+                                            const isGroupVisible = isImmoral ? false : (!isVertical || showGroupForCards.has(dept.key));
+                                            // Dynamic resultado & margin: include Group cost only when visible
+                                            const dynamicResultado = isImmoral
+                                                ? dept.margin
+                                                : isGroupVisible
+                                                    ? dept.margin  // income - directExpenses - groupCost
+                                                    : dept.income - dept.directExpenses; // income - directExpenses only
+                                            const dynamicMarginPct = dept.income > 0 ? (dynamicResultado / dept.income) * 100 : 0;
 
-                                                        {/* Expenses Breakdown */}
-                                                        <div className="space-y-1 text-sm">
-                                                            {dept.categories.map(cat => {
-                                                                const val = dept.breakdown[cat.key] || 0;
-                                                                return (
-                                                                    <div key={cat.label} className="flex justify-between text-muted-foreground">
-                                                                        <span>{cat.label}</span>
-                                                                        <span>{val > 0 ? formatCurrency(val) : '—'}</span>
-                                                                    </div>
-                                                                );
-                                                            })}
-                                                        </div>
+                                            return (
+                                                <Card key={dept.key} className="hover:shadow-md transition-shadow">
+                                                    <CardHeader className="pb-2">
+                                                        <CardTitle className="text-base font-bold flex justify-between items-center">
+                                                            {dept.name}
+                                                            <span className={`text-sm font-normal px-2 py-1 rounded-full ${dynamicResultado >= 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                                {dynamicMarginPct.toFixed(1)}% margen
+                                                            </span>
+                                                        </CardTitle>
+                                                    </CardHeader>
+                                                    <CardContent>
+                                                        <div className="space-y-4">
+                                                            {/* Facturación */}
+                                                            <div className="flex justify-between items-center border-b pb-2">
+                                                                <span className="text-sm font-medium text-gray-500">Facturación</span>
+                                                                <span className="text-lg font-bold text-gray-900">{formatCurrency(dept.income)}</span>
+                                                            </div>
 
-                                                        {/* Group % — hidden for verticals by default, toggleable ON/OFF */}
-                                                        {dept.key !== 'Immoral' && (() => {
-                                                            const isVertical = VERTICAL_DEPTS.includes(dept.name);
-                                                            const isGroupVisible = !isVertical || showGroupForCards.has(dept.key);
-                                                            // Resultado: when Group is hidden => revenue - direct expenses only
-                                                            // When Group is visible => revenue - direct expenses - group cost (= dept.margin)
-                                                            const resultado = isGroupVisible
-                                                                ? dept.margin  // income - totalExpenses - groupCost
-                                                                : dept.income - dept.directExpenses; // income - directExpenses only
-                                                            return (
-                                                                <>
-                                                                    {isGroupVisible ? (
-                                                                        <div
-                                                                            className={`flex justify-between text-sm text-indigo-600 border-t pt-2 ${isVertical ? 'cursor-pointer hover:bg-indigo-50/50 -mx-1 px-1 rounded transition-colors' : ''}`}
-                                                                            onClick={isVertical ? (e) => {
-                                                                                e.stopPropagation();
-                                                                                setShowGroupForCards(prev => {
-                                                                                    const next = new Set(prev);
-                                                                                    next.delete(dept.key);
-                                                                                    return next;
-                                                                                });
-                                                                            } : undefined}
-                                                                            title={isVertical ? 'Click para ocultar Group %' : undefined}
-                                                                        >
-                                                                            <span className="font-medium">Group % <span className="text-indigo-400 font-normal">({dept.groupPctDisplay}%)</span></span>
-                                                                            <span className="font-medium">{dept.groupCost > 0 ? formatCurrency(dept.groupCost) : '—'}</span>
+                                                            {/* Expenses Breakdown */}
+                                                            <div className="space-y-1 text-sm">
+                                                                {dept.categories.map(cat => {
+                                                                    const val = dept.breakdown[cat.key] || 0;
+                                                                    return (
+                                                                        <div key={cat.label} className="flex justify-between text-muted-foreground">
+                                                                            <span>{cat.label}</span>
+                                                                            <span>{val > 0 ? formatCurrency(val) : '—'}</span>
                                                                         </div>
-                                                                    ) : (
-                                                                        <div className="flex justify-center border-t pt-1">
-                                                                            <button
-                                                                                onClick={(e) => {
+                                                                    );
+                                                                })}
+                                                            </div>
+
+                                                            {/* Group % — hidden for verticals by default, toggleable ON/OFF */}
+                                                            {!isImmoral && (() => {
+                                                                return (
+                                                                    <>
+                                                                        {isGroupVisible ? (
+                                                                            <div
+                                                                                className={`flex justify-between text-sm text-indigo-600 border-t pt-2 ${isVertical ? 'cursor-pointer hover:bg-indigo-50/50 -mx-1 px-1 rounded transition-colors' : ''}`}
+                                                                                onClick={isVertical ? (e) => {
                                                                                     e.stopPropagation();
                                                                                     setShowGroupForCards(prev => {
                                                                                         const next = new Set(prev);
-                                                                                        next.add(dept.key);
+                                                                                        next.delete(dept.key);
                                                                                         return next;
                                                                                     });
-                                                                                }}
-                                                                                className="text-gray-300 hover:text-indigo-500 transition-colors p-0.5 rounded-full hover:bg-indigo-50"
-                                                                                title="Mostrar Group %"
+                                                                                } : undefined}
+                                                                                title={isVertical ? 'Click para ocultar Group %' : undefined}
                                                                             >
-                                                                                <MoreHorizontal size={16} />
-                                                                            </button>
-                                                                        </div>
-                                                                    )}
+                                                                                <span className="font-medium">Group % <span className="text-indigo-400 font-normal">({dept.groupPctDisplay}%)</span></span>
+                                                                                <span className="font-medium">{dept.groupCost > 0 ? formatCurrency(dept.groupCost) : '—'}</span>
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div className="flex justify-center border-t pt-1">
+                                                                                <button
+                                                                                    onClick={(e) => {
+                                                                                        e.stopPropagation();
+                                                                                        setShowGroupForCards(prev => {
+                                                                                            const next = new Set(prev);
+                                                                                            next.add(dept.key);
+                                                                                            return next;
+                                                                                        });
+                                                                                    }}
+                                                                                    className="text-gray-300 hover:text-indigo-500 transition-colors p-0.5 rounded-full hover:bg-indigo-50"
+                                                                                    title="Mostrar Group %"
+                                                                                >
+                                                                                    <MoreHorizontal size={16} />
+                                                                                </button>
+                                                                            </div>
+                                                                        )}
+                                                                    </>
+                                                                );
+                                                            })()}
 
-                                                                    {/* Resultado — dynamically computed based on Group visibility */}
-                                                                    <div className="pt-2 border-t">
-                                                                        <div className="flex justify-between items-center">
-                                                                            <span className="font-bold text-gray-900">Resultado</span>
-                                                                            <span className={`text-xl font-bold ${resultado >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                                                {formatCurrency(resultado)}
-                                                                            </span>
-                                                                        </div>
-                                                                    </div>
-                                                                </>
-                                                            );
-                                                        })()}
-
-                                                        {/* Resultado for Immoral (no Group %) */}
-                                                        {dept.key === 'Immoral' && (
+                                                            {/* Resultado — dynamically computed based on Group visibility */}
                                                             <div className="pt-2 border-t">
                                                                 <div className="flex justify-between items-center">
                                                                     <span className="font-bold text-gray-900">Resultado</span>
-                                                                    <span className={`text-xl font-bold ${dept.margin >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                                                        {formatCurrency(dept.margin)}
+                                                                    <span className={`text-xl font-bold ${dynamicResultado >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                        {formatCurrency(dynamicResultado)}
                                                                     </span>
                                                                 </div>
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                </CardContent>
-                                            </Card>
-                                        ))}
+                                                        </div>
+                                                    </CardContent>
+                                                </Card>
+                                            );
+                                        })}
                                     {deptPerformance.length === 0 && (
                                         <Card className="col-span-3 p-6 text-center text-muted-foreground border-dashed">
                                             No department data available.
