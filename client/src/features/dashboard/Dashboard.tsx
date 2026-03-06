@@ -287,7 +287,63 @@ export default function Dashboard() {
         queryFn: () => adminApi.getPLMatrix(year, 'real'),
     });
 
+    // Custom rows for dynamic structures
+    const { data: customRowsData } = useQuery({
+        queryKey: ['pl-custom-rows'],
+        queryFn: adminApi.getCustomRows,
+        staleTime: 60000,
+    });
+    const customRows = customRowsData?.rows || [];
+
+    const mergedExpenseKeyMap = useMemo(() => {
+        const expCustom = customRows.filter((r: any) => r.block_type === 'expense');
+        const merged: Record<string, { dept: string; items: string[] }[]> = {};
+        Object.keys(EXPENSE_KEY_MAP).forEach(k => {
+            merged[k] = EXPENSE_KEY_MAP[k].map(g => ({ ...g, items: [...g.items] }));
+        });
+        expCustom.forEach((cr: any) => {
+            if (!merged[cr.section_key]) return;
+            let group = merged[cr.section_key].find(g => g.dept === cr.dept);
+            if (!group) {
+                group = { dept: cr.dept, items: [] };
+                merged[cr.section_key].push(group);
+            }
+            if (!group.items.includes(cr.item_name)) group.items.push(cr.item_name);
+        });
+        return merged;
+    }, [customRows]);
+
+    const mergedRevenueStructure = useMemo(() => {
+        const revCustom = customRows.filter((r: any) => r.block_type === 'revenue');
+        const merged = REVENUE_STRUCTURE.map(g => ({ ...g, services: [...g.services] }));
+        revCustom.forEach((cr: any) => {
+            let group = merged.find(g => g.dept === cr.dept);
+            if (!group) {
+                group = { dept: cr.dept, services: [] };
+                merged.push(group);
+            }
+            if (!group.services.includes(cr.item_name)) group.services.push(cr.item_name);
+        });
+        return merged;
+    }, [customRows]);
+
     // Build lookup from PL matrix rows — SAME format as DepartmentPL
+    // Build reverse mapping: "dept::item" → [sectionKey, ...]
+    const dashExpenseSectionMap = useMemo(() => {
+        const map: Record<string, string[]> = {};
+        Object.entries(mergedExpenseKeyMap).forEach(([sectionKey, deptItems]) => {
+            deptItems.forEach(({ dept, items }) => {
+                items.forEach(item => {
+                    const k = `${dept}::${item}`;
+                    if (!map[k]) map[k] = [];
+                    if (!map[k].includes(sectionKey)) map[k].push(sectionKey);
+                });
+            });
+        });
+        return map;
+    }, [mergedExpenseKeyMap]);
+
+    // Build lookup from PL matrix rows — uses section keys for expenses (same as DepartmentPL)
     const plValues = useMemo(() => {
         const vals: Record<string, number> = {};
         if (plRealData?.sections) {
@@ -300,21 +356,42 @@ export default function Dashboard() {
                 }
             });
             const expenseSection = plRealData.sections.find((s: any) => s.code === 'EXPENSES');
-            expenseSection?.rows?.forEach((row: any) => {
-                if (row.values && row.name && Array.isArray(row.values)) {
-                    row.values.forEach((val: number, monthIdx: number) => {
-                        vals[`expense-${row.dept || 'General'}-${row.name}-${monthIdx}`] = val || 0;
-                    });
-                }
-            });
+            if (expenseSection?.rows) {
+                // Process legacy rows first, then section_key rows second
+                const legacyRows = expenseSection.rows.filter((r: any) => !r.section_key);
+                const sectionKeyRows = expenseSection.rows.filter((r: any) => !!r.section_key);
+
+                legacyRows.forEach((row: any) => {
+                    if (row.values && row.name && Array.isArray(row.values)) {
+                        const dept = row.dept || 'General';
+                        row.values.forEach((val: number, monthIdx: number) => {
+                            const mapKey = `${dept}::${row.name}`;
+                            const ms = dashExpenseSectionMap[mapKey];
+                            if (ms && ms.length > 0) {
+                                ms.forEach(sk => { vals[`${sk}-${dept}-${row.name}-${monthIdx}`] = val || 0; });
+                            } else {
+                                vals[`expense-${dept}-${row.name}-${monthIdx}`] = val || 0;
+                            }
+                        });
+                    }
+                });
+
+                sectionKeyRows.forEach((row: any) => {
+                    if (row.values && row.name && Array.isArray(row.values)) {
+                        const dept = row.dept || 'General';
+                        row.values.forEach((val: number, monthIdx: number) => {
+                            vals[`${row.section_key}-${dept}-${row.name}-${monthIdx}`] = val || 0;
+                        });
+                    }
+                });
+            }
         }
         return vals;
-    }, [plRealData]);
+    }, [plRealData, dashExpenseSectionMap]);
 
-    // Helper: get value from PL lookup (normalizes section key like DepartmentPL)
+    // Helper: get value from PL lookup — uses section key directly (matches key format in plValues)
     const getVal = (section: string, dept: string, item: string, month: number): number => {
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
-        return plValues[`${normalizedSection}-${dept}-${item}-${month}`] || 0;
+        return plValues[`${section}-${dept}-${item}-${month}`] || 0;
     };
 
     // Compute department performance from PL matrix
@@ -323,7 +400,7 @@ export default function Dashboard() {
 
         // Total general revenue per month (for Group %)
         const totalGenRevenue = Array(12).fill(0);
-        REVENUE_STRUCTURE.forEach(g => {
+        mergedRevenueStructure.forEach(g => {
             g.services.forEach(s => {
                 for (let m = 0; m < 12; m++) {
                     totalGenRevenue[m] += getVal('revenue', g.dept, s, m);
@@ -335,7 +412,7 @@ export default function Dashboard() {
         // This includes personal, marketing, formación, software, gastosOp — ALL categories where dept=Immoral
         const immoralExpensesMonthly = Array(12).fill(0);
         ALL_EXPENSE_KEYS.forEach(catKey => {
-            const items = EXPENSE_KEY_MAP[catKey] || [];
+            const items = mergedExpenseKeyMap[catKey] || [];
             items.filter(g => g.dept === 'Immoral').forEach(g => {
                 g.items.forEach(item => {
                     for (let m = 0; m < 12; m++) {
@@ -350,7 +427,7 @@ export default function Dashboard() {
             // Use revenueOverride if defined, otherwise standard REVENUE_STRUCTURE filter
             const revenueSource = config.revenueOverride
                 ? config.revenueOverride
-                : REVENUE_STRUCTURE.filter(g => config.deptNames.includes(g.dept));
+                : mergedRevenueStructure.filter(g => config.deptNames.includes(g.dept));
             let income = 0;
             revenueSource.forEach(g => {
                 g.services.forEach(s => {
@@ -364,7 +441,7 @@ export default function Dashboard() {
             const breakdown: Record<string, number> = {};
             let totalExpenses = 0;
             config.expenseCategories.forEach(cat => {
-                const items = EXPENSE_KEY_MAP[cat.key] || [];
+                const items = mergedExpenseKeyMap[cat.key] || [];
                 let catTotal = 0;
                 items.filter(g => config.deptNames.includes(g.dept))
                     .forEach(g => {
@@ -424,14 +501,14 @@ export default function Dashboard() {
                 categories: config.expenseCategories,
             };
         });
-    }, [plValues, plRealData, activeMonths]);
+    }, [plValues, plRealData, activeMonths, mergedRevenueStructure, mergedExpenseKeyMap]);
 
     // Compute KPIs from PL matrix — Total Expenses = sum of ALL direct P&L expense lines (no Group redistribution)
     const plKpis = useMemo(() => {
         let totalBilling = 0;
 
         // Revenue: sum all revenue structure items across active months
-        REVENUE_STRUCTURE.forEach(g => {
+        mergedRevenueStructure.forEach(g => {
             g.services.forEach(s => {
                 for (const m of activeMonths) {
                     totalBilling += getVal('revenue', g.dept, s, m);
@@ -442,7 +519,7 @@ export default function Dashboard() {
         // Expenses: sum ALL expense lines from ALL categories across active months (direct from P&L, no redistribution)
         let totalExpenses = 0;
         ALL_EXPENSE_KEYS.forEach(catKey => {
-            const items = EXPENSE_KEY_MAP[catKey] || [];
+            const items = mergedExpenseKeyMap[catKey] || [];
             items.forEach(g => {
                 g.items.forEach(item => {
                     for (const m of activeMonths) {
@@ -458,7 +535,7 @@ export default function Dashboard() {
             netMargin: Math.round((totalBilling - totalExpenses) * 100) / 100,
             marginPercentage: totalBilling > 0 ? ((totalBilling - totalExpenses) / totalBilling) * 100 : 0,
         };
-    }, [plValues, activeMonths]);
+    }, [plValues, activeMonths, mergedRevenueStructure, mergedExpenseKeyMap]);
 
     const isLoading = isLoadingPL;
 

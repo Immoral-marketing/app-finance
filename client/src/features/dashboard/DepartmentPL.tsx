@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/lib/api/admin';
@@ -274,12 +274,69 @@ export default function DepartmentPL() {
         staleTime: 0
     });
 
-    // Clear cellValues when switching tabs
+    // Custom rows query
+    const { data: customRowsData } = useQuery({
+        queryKey: ['pl-custom-rows'],
+        queryFn: adminApi.getCustomRows,
+        staleTime: 60000,
+    });
+    const customRows = customRowsData?.rows || [];
+
+    // Merge custom rows into structures
+    const mergedExpenseKeyMap = useMemo(() => {
+        const expCustom = customRows.filter(r => r.block_type === 'expense');
+        const merged: Record<string, { dept: string; items: string[] }[]> = {};
+        Object.keys(EXPENSE_KEY_MAP).forEach(k => {
+            merged[k] = EXPENSE_KEY_MAP[k].map(g => ({ ...g, items: [...g.items] }));
+        });
+        expCustom.forEach(cr => {
+            if (!merged[cr.section_key]) return;
+            let group = merged[cr.section_key].find(g => g.dept === cr.dept);
+            if (!group) {
+                group = { dept: cr.dept, items: [] };
+                merged[cr.section_key].push(group);
+            }
+            if (!group.items.includes(cr.item_name)) group.items.push(cr.item_name);
+        });
+        return merged;
+    }, [customRows]);
+
+    const mergedRevenueStructure = useMemo(() => {
+        const revCustom = customRows.filter(r => r.block_type === 'revenue');
+        const merged = REVENUE_STRUCTURE.map(g => ({ ...g, services: [...g.services] }));
+        revCustom.forEach(cr => {
+            let group = merged.find(g => g.dept === cr.dept);
+            if (!group) {
+                group = { dept: cr.dept, services: [] };
+                merged.push(group);
+            }
+            if (!group.services.includes(cr.item_name)) group.services.push(cr.item_name);
+        });
+        return merged;
+    }, [customRows]);
+
+    // Clear cellValues when switching tabs or year
     useEffect(() => {
         setCellValues({});
-    }, [typeParam]);
+    }, [typeParam, year]);
 
     // Populate cellValues from API data
+    // Build reverse mapping for expense items: "dept::item" → [section_key, ...]
+    // Uses merged structure so custom rows are included
+    const expenseSectionMap = useMemo(() => {
+        const map: Record<string, string[]> = {};
+        Object.entries(mergedExpenseKeyMap).forEach(([sectionKey, deptItems]) => {
+            deptItems.forEach(({ dept, items }) => {
+                items.forEach(item => {
+                    const k = `${dept}::${item}`;
+                    if (!map[k]) map[k] = [];
+                    if (!map[k].includes(sectionKey)) map[k].push(sectionKey);
+                });
+            });
+        });
+        return map;
+    }, [mergedExpenseKeyMap]);
+
     useEffect(() => {
         if (!matrixData?.sections) return;
 
@@ -299,21 +356,40 @@ export default function DepartmentPL() {
 
         const expenseSection = matrixData.sections.find((s: any) => s.code === 'EXPENSES');
         if (expenseSection?.rows) {
-            expenseSection.rows.forEach((row: any) => {
-                if (row.values && row.name) {
-                    if (Array.isArray(row.values)) {
-                        row.values.forEach((val: number, monthIdx: number) => {
-                            const dept = row.dept || 'General';
-                            const key = `expense-${dept}-${row.name}-${monthIdx}-${typeParam}`;
-                            newValues[key] = val || 0;
-                        });
-                    }
+            // Process legacy rows (no section_key) FIRST, then section_key rows SECOND
+            const legacyRows = expenseSection.rows.filter((r: any) => !r.section_key);
+            const sectionKeyRows = expenseSection.rows.filter((r: any) => !!r.section_key);
+
+            legacyRows.forEach((row: any) => {
+                if (row.values && row.name && Array.isArray(row.values)) {
+                    const dept = row.dept || 'General';
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        const mapKey = `${dept}::${row.name}`;
+                        const matchingSections = expenseSectionMap[mapKey];
+                        if (matchingSections && matchingSections.length > 0) {
+                            matchingSections.forEach((sk: string) => {
+                                newValues[`${sk}-${dept}-${row.name}-${monthIdx}-${typeParam}`] = val || 0;
+                            });
+                        } else {
+                            newValues[`expense-${dept}-${row.name}-${monthIdx}-${typeParam}`] = val || 0;
+                        }
+                    });
+                }
+            });
+
+            sectionKeyRows.forEach((row: any) => {
+                if (row.values && row.name && Array.isArray(row.values)) {
+                    const dept = row.dept || 'General';
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        const key = `${row.section_key}-${dept}-${row.name}-${monthIdx}-${typeParam}`;
+                        newValues[key] = val || 0;
+                    });
                 }
             });
         }
 
         setCellValues(prev => ({ ...prev, ...newValues }));
-    }, [matrixData, typeParam]);
+    }, [matrixData, typeParam, expenseSectionMap]);
 
     // Populate comparison data
     const [compRealValues, setCompRealValues] = useState<Record<string, number>>({});
@@ -331,15 +407,34 @@ export default function DepartmentPL() {
             }
         });
         const expenseSection = realData.sections.find((s: any) => s.code === 'EXPENSES');
-        expenseSection?.rows?.forEach((row: any) => {
-            if (row.values && row.name && Array.isArray(row.values)) {
-                row.values.forEach((val: number, monthIdx: number) => {
-                    vals[`expense-${row.dept || 'General'}-${row.name}-${monthIdx}`] = val || 0;
-                });
-            }
-        });
+        if (expenseSection?.rows) {
+            const legacyRows = expenseSection.rows.filter((r: any) => !r.section_key);
+            const sectionKeyRows = expenseSection.rows.filter((r: any) => !!r.section_key);
+            legacyRows.forEach((row: any) => {
+                if (row.values && row.name && Array.isArray(row.values)) {
+                    const dept = row.dept || 'General';
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        const mapKey = `${dept}::${row.name}`;
+                        const ms = expenseSectionMap[mapKey];
+                        if (ms && ms.length > 0) {
+                            ms.forEach((sk: string) => { vals[`${sk}-${dept}-${row.name}-${monthIdx}`] = val || 0; });
+                        } else {
+                            vals[`expense-${dept}-${row.name}-${monthIdx}`] = val || 0;
+                        }
+                    });
+                }
+            });
+            sectionKeyRows.forEach((row: any) => {
+                if (row.values && row.name && Array.isArray(row.values)) {
+                    const dept = row.dept || 'General';
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        vals[`${row.section_key}-${dept}-${row.name}-${monthIdx}`] = val || 0;
+                    });
+                }
+            });
+        }
         setCompRealValues(vals);
-    }, [realData]);
+    }, [realData, expenseSectionMap]);
 
     useEffect(() => {
         if (!budgetData?.sections) return;
@@ -353,19 +448,37 @@ export default function DepartmentPL() {
             }
         });
         const expenseSection = budgetData.sections.find((s: any) => s.code === 'EXPENSES');
-        expenseSection?.rows?.forEach((row: any) => {
-            if (row.values && row.name && Array.isArray(row.values)) {
-                row.values.forEach((val: number, monthIdx: number) => {
-                    vals[`expense-${row.dept || 'General'}-${row.name}-${monthIdx}`] = val || 0;
-                });
-            }
-        });
+        if (expenseSection?.rows) {
+            const legacyRows = expenseSection.rows.filter((r: any) => !r.section_key);
+            const sectionKeyRows = expenseSection.rows.filter((r: any) => !!r.section_key);
+            legacyRows.forEach((row: any) => {
+                if (row.values && row.name && Array.isArray(row.values)) {
+                    const dept = row.dept || 'General';
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        const mapKey = `${dept}::${row.name}`;
+                        const ms = expenseSectionMap[mapKey];
+                        if (ms && ms.length > 0) {
+                            ms.forEach((sk: string) => { vals[`${sk}-${dept}-${row.name}-${monthIdx}`] = val || 0; });
+                        } else {
+                            vals[`expense-${dept}-${row.name}-${monthIdx}`] = val || 0;
+                        }
+                    });
+                }
+            });
+            sectionKeyRows.forEach((row: any) => {
+                if (row.values && row.name && Array.isArray(row.values)) {
+                    const dept = row.dept || 'General';
+                    row.values.forEach((val: number, monthIdx: number) => {
+                        vals[`${row.section_key}-${dept}-${row.name}-${monthIdx}`] = val || 0;
+                    });
+                }
+            });
+        }
         setCompBudgetValues(vals);
-    }, [budgetData]);
+    }, [budgetData, expenseSectionMap]);
 
     const getCellKey = (section: string, dept: string, item: string, monthIdx: number) => {
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
-        return `${normalizedSection}-${dept}-${item}-${monthIdx}-${typeParam}`;
+        return `${section}-${dept}-${item}-${monthIdx}-${typeParam}`;
     };
 
     const getCellValue = (section: string, dept: string, item: string, monthIdx: number): number => {
@@ -402,8 +515,7 @@ export default function DepartmentPL() {
 
     // --- Comparison helpers ---
     const getCompValue = (source: Record<string, number>, section: string, dept: string, item: string, monthIdx: number): number => {
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
-        return source[`${normalizedSection}-${dept}-${item}-${monthIdx}`] || 0;
+        return source[`${section}-${dept}-${item}-${monthIdx}`] || 0;
     };
 
     const calcCompSectionTotal = (source: Record<string, number>, section: string, structure: { dept: string; items?: string[]; services?: string[] }[]): number[] => {
@@ -420,14 +532,14 @@ export default function DepartmentPL() {
     };
 
     // --- Filter structures for this department ---
-    const deptRevenue = REVENUE_STRUCTURE.filter(g => deptNames.includes(g.dept));
-    const deptPersonal = filterByDept(EXPENSE_STRUCTURE.personalItems, deptNames);
-    const deptComisiones = filterByDept(EXPENSE_STRUCTURE.comisionesItems, deptNames);
-    const deptMarketing = filterByDept(EXPENSE_STRUCTURE.marketingItems, deptNames);
-    const deptFormacion = filterByDept(EXPENSE_STRUCTURE.formacionItems, deptNames);
-    const deptSoftware = filterByDept(EXPENSE_STRUCTURE.softwareItems, deptNames);
-    const deptGastosOp = filterByDept(EXPENSE_STRUCTURE.gastosOpItems, deptNames);
-    const deptAdspent = filterByDept(EXPENSE_STRUCTURE.adspentItems, deptNames);
+    const deptRevenue = mergedRevenueStructure.filter(g => deptNames.includes(g.dept));
+    const deptPersonal = filterByDept(mergedExpenseKeyMap['personal'] || [], deptNames);
+    const deptComisiones = filterByDept(mergedExpenseKeyMap['comisiones'] || [], deptNames);
+    const deptMarketing = filterByDept(mergedExpenseKeyMap['marketing'] || [], deptNames);
+    const deptFormacion = filterByDept(mergedExpenseKeyMap['formacion'] || [], deptNames);
+    const deptSoftware = filterByDept(mergedExpenseKeyMap['software'] || [], deptNames);
+    const deptGastosOp = filterByDept(mergedExpenseKeyMap['gastosOp'] || [], deptNames);
+    const deptAdspent = filterByDept(mergedExpenseKeyMap['adspent'] || [], deptNames);
 
     // All expense categories for this department
     const expCats = [
@@ -642,7 +754,7 @@ export default function DepartmentPL() {
 
         // === TOTAL GENERAL revenue (all depts) for Group % calculation ===
         const totalGeneralRevenue = Array(12).fill(0);
-        REVENUE_STRUCTURE.forEach(group => {
+        mergedRevenueStructure.forEach(group => {
             group.services.forEach(service => {
                 for (let i = 0; i < 12; i++) {
                     totalGeneralRevenue[i] += getCompValue(compRealValues, 'revenue', group.dept, service, i);
@@ -658,7 +770,7 @@ export default function DepartmentPL() {
         // === ALL Immoral expenses per month (for Group % distribution — same logic as Dashboard cards) ===
         const immoralExpensesMonthly = Array(12).fill(0);
         ALL_EXPENSE_KEYS.forEach(catKey => {
-            const items = EXPENSE_KEY_MAP[catKey] || [];
+            const items = mergedExpenseKeyMap[catKey] || [];
             items.filter(g => g.dept === 'Immoral').forEach(g => {
                 g.items.forEach(item => {
                     for (let i = 0; i < 12; i++) {

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/lib/api/admin';
 import { Button } from '@/components/ui/Button';
-import { Download, MessageSquare, X, Check, Trash2, CheckCircle2 } from 'lucide-react';
+import { Download, MessageSquare, X, Check, Trash2, CheckCircle2, Plus, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 
 const TABS = ['Real', 'Presupuesto', 'Comparación'] as const;
@@ -88,33 +88,99 @@ interface CellData {
 }
 
 // ─── Helper: parse API data into a flat key→value map ────────────────────────
+// Uses section_key from expense rows to differentiate same-name items (e.g. David in personal vs comisiones)
+// For legacy data without section_key, maps to all matching sections in EXPENSE_STRUCTURE
 function parseMatrixData(matrixData: any, typeParam: 'real' | 'budget'): Record<string, CellData> {
     const values: Record<string, CellData> = {};
     if (!matrixData?.sections) return values;
 
-    const processRow = (row: any, sectionCode: string) => {
-        if (row.values && Array.isArray(row.values)) {
-            const dept = row.dept || 'General';
-            row.values.forEach((val: number, monthIdx: number) => {
-                const key = `${sectionCode}-${dept}-${row.name}-${monthIdx}-${typeParam}`;
-                const meta = row.metadata?.[monthIdx] || {};
-                values[key] = {
-                    value: val || 0,
-                    comment: meta.comment,
-                    assigned_to: meta.assigned_to
-                };
+    // Build reverse mapping: "dept::item" → [section_key, section_key, ...]
+    // This maps each expense item to the section(s) it appears in
+    const expenseSectionMap: Record<string, string[]> = {};
+    const sectionEntries: [string, string, { dept: string; items: string[] }[]][] = [
+        ['personalItems', 'personal', EXPENSE_STRUCTURE.personalItems],
+        ['comisionesItems', 'comisiones', EXPENSE_STRUCTURE.comisionesItems],
+        ['marketingItems', 'marketing', EXPENSE_STRUCTURE.marketingItems],
+        ['formacionItems', 'formacion', EXPENSE_STRUCTURE.formacionItems],
+        ['softwareItems', 'software', EXPENSE_STRUCTURE.softwareItems],
+        ['gastosOpItems', 'gastosOp', EXPENSE_STRUCTURE.gastosOpItems],
+        ['adspentItems', 'adspent', EXPENSE_STRUCTURE.adspentItems],
+    ];
+    sectionEntries.forEach(([, sectionKey, deptItems]) => {
+        deptItems.forEach(({ dept, items }) => {
+            items.forEach(item => {
+                const mapKey = `${dept}::${item}`;
+                if (!expenseSectionMap[mapKey]) expenseSectionMap[mapKey] = [];
+                if (!expenseSectionMap[mapKey].includes(sectionKey)) {
+                    expenseSectionMap[mapKey].push(sectionKey);
+                }
             });
-        }
+        });
+    });
+
+    const setCellValue = (key: string, val: number, meta: any) => {
+        values[key] = {
+            value: val || 0,
+            comment: meta.comment,
+            assigned_to: meta.assigned_to
+        };
     };
 
+    // Process revenue rows
     const revenueSection = matrixData.sections.find((s: any) => s.code === 'REVENUE');
     if (revenueSection?.rows) {
-        revenueSection.rows.forEach((row: any) => processRow(row, 'revenue'));
+        revenueSection.rows.forEach((row: any) => {
+            if (row.values && Array.isArray(row.values)) {
+                const dept = row.dept || 'General';
+                row.values.forEach((val: number, monthIdx: number) => {
+                    const key = `revenue-${dept}-${row.name}-${monthIdx}-${typeParam}`;
+                    const meta = row.metadata?.[monthIdx] || {};
+                    setCellValue(key, val, meta);
+                });
+            }
+        });
     }
 
+    // Process expense rows
+    // IMPORTANT: Process legacy rows (no section_key) FIRST, then rows with explicit section_key SECOND.
+    // This ensures explicit section_key records (from user saves) overwrite legacy mappings.
     const expenseSection = matrixData.sections.find((s: any) => s.code === 'EXPENSES');
     if (expenseSection?.rows) {
-        expenseSection.rows.forEach((row: any) => processRow(row, 'expense'));
+        const legacyRows = expenseSection.rows.filter((r: any) => !r.section_key);
+        const sectionKeyRows = expenseSection.rows.filter((r: any) => !!r.section_key);
+
+        // Process legacy rows first (they map to all matching sections)
+        legacyRows.forEach((row: any) => {
+            if (row.values && Array.isArray(row.values)) {
+                const dept = row.dept || 'General';
+                row.values.forEach((val: number, monthIdx: number) => {
+                    const meta = row.metadata?.[monthIdx] || {};
+                    const mapKey = `${dept}::${row.name}`;
+                    const matchingSections = expenseSectionMap[mapKey];
+                    if (matchingSections && matchingSections.length > 0) {
+                        matchingSections.forEach(sectionKey => {
+                            const key = `${sectionKey}-${dept}-${row.name}-${monthIdx}-${typeParam}`;
+                            setCellValue(key, val, meta);
+                        });
+                    } else {
+                        const key = `expense-${dept}-${row.name}-${monthIdx}-${typeParam}`;
+                        setCellValue(key, val, meta);
+                    }
+                });
+            }
+        });
+
+        // Process section_key rows second (they OVERRIDE legacy mappings)
+        sectionKeyRows.forEach((row: any) => {
+            if (row.values && Array.isArray(row.values)) {
+                const dept = row.dept || 'General';
+                row.values.forEach((val: number, monthIdx: number) => {
+                    const meta = row.metadata?.[monthIdx] || {};
+                    const key = `${row.section_key}-${dept}-${row.name}-${monthIdx}-${typeParam}`;
+                    setCellValue(key, val, meta);
+                });
+            }
+        });
     }
 
     return values;
@@ -298,6 +364,134 @@ export default function PLMatrix() {
         staleTime: 0,
     });
 
+    // Custom rows query
+    const { data: customRowsData } = useQuery({
+        queryKey: ['pl-custom-rows'],
+        queryFn: adminApi.getCustomRows,
+        staleTime: 60000,
+    });
+    const customRows = customRowsData?.rows || [];
+
+    // Add custom row mutation
+    const addRowMutation = useMutation({
+        mutationFn: adminApi.addCustomRow,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pl-custom-rows'] });
+            queryClient.invalidateQueries({ queryKey: ['pl-matrix'] });
+            toast.success('Fila añadida correctamente');
+        },
+        onError: (err: any) => {
+            toast.error(err?.message || 'Error al añadir fila');
+        }
+    });
+
+    const deleteRowMutation = useMutation({
+        mutationFn: adminApi.deleteCustomRow,
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pl-custom-rows'] });
+            queryClient.invalidateQueries({ queryKey: ['pl-matrix'] });
+            toast.success('Fila eliminada');
+        },
+        onError: () => toast.error('Error al eliminar fila')
+    });
+
+    const renameRowMutation = useMutation({
+        mutationFn: ({ id, name }: { id: string; name: string }) => adminApi.renameCustomRow(id, name),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['pl-custom-rows'] });
+            queryClient.invalidateQueries({ queryKey: ['pl-matrix'] });
+            toast.success('Fila renombrada');
+        },
+        onError: () => toast.error('Error al renombrar fila')
+    });
+
+    const handleAddRow = (blockType: 'revenue' | 'expense', sectionKey: string, dept: string) => {
+        const name = prompt(`Nombre de la nueva fila en ${dept}:`);
+        if (!name || !name.trim()) return;
+        addRowMutation.mutate({ block_type: blockType, section_key: sectionKey, dept, item_name: name.trim() });
+    };
+
+    // Helper: find custom row ID for a given (blockType, sectionKey, dept, itemName)
+    const findCustomRowId = (blockType: string, sectionKey: string, dept: string, itemName: string) => {
+        return customRows.find(r =>
+            r.block_type === blockType && r.section_key === sectionKey && r.dept === dept && r.item_name === itemName
+        )?.id;
+    };
+
+    const handleDeleteRow = (blockType: string, sectionKey: string, dept: string, itemName: string) => {
+        const id = findCustomRowId(blockType, sectionKey, dept, itemName);
+        if (!id) return;
+        if (!confirm(`¿Eliminar la fila "${itemName}"?`)) return;
+        deleteRowMutation.mutate(id);
+    };
+
+    const handleRenameRow = (blockType: string, sectionKey: string, dept: string, itemName: string) => {
+        const id = findCustomRowId(blockType, sectionKey, dept, itemName);
+        if (!id) return;
+        const newName = prompt('Nuevo nombre:', itemName);
+        if (!newName || !newName.trim() || newName.trim() === itemName) return;
+        renameRowMutation.mutate({ id, name: newName.trim() });
+    };
+
+    // ── Merge custom rows into structures ─────────────────────────────────────
+    const mergedExpenseStructure = useMemo(() => {
+        const expCustom = customRows.filter(r => r.block_type === 'expense');
+        const merged = { ...EXPENSE_STRUCTURE };
+
+        // Deep clone each array
+        const keys = Object.keys(merged) as (keyof typeof EXPENSE_STRUCTURE)[];
+        keys.forEach(k => {
+            merged[k] = merged[k].map(g => ({ ...g, items: [...g.items] }));
+        });
+
+        // Section key → structure key mapping
+        const sectionToKey: Record<string, keyof typeof EXPENSE_STRUCTURE> = {
+            personal: 'personalItems',
+            comisiones: 'comisionesItems',
+            marketing: 'marketingItems',
+            formacion: 'formacionItems',
+            software: 'softwareItems',
+            gastosOp: 'gastosOpItems',
+            adspent: 'adspentItems',
+        };
+
+        expCustom.forEach(cr => {
+            const structKey = sectionToKey[cr.section_key];
+            if (!structKey) return;
+            const arr = merged[structKey];
+            // Find existing dept group or create one
+            let group = arr.find(g => g.dept === cr.dept);
+            if (!group) {
+                group = { dept: cr.dept, items: [] };
+                arr.push(group);
+            }
+            if (!group.items.includes(cr.item_name)) {
+                group.items.push(cr.item_name);
+            }
+        });
+
+        return merged;
+    }, [customRows]);
+
+    const mergedRevenueStructure = useMemo(() => {
+        const revCustom = customRows.filter(r => r.block_type === 'revenue');
+        const merged = REVENUE_STRUCTURE.map(g => ({ ...g, services: [...g.services] }));
+
+        revCustom.forEach(cr => {
+            // Find a group matching the dept (use section_key as dept identifier for revenue)
+            let group = merged.find(g => g.dept === cr.dept);
+            if (!group) {
+                group = { dept: cr.dept, services: [] };
+                merged.push(group);
+            }
+            if (!group.services.includes(cr.item_name)) {
+                group.services.push(cr.item_name);
+            }
+        });
+
+        return merged;
+    }, [customRows]);
+
     // Notes query — loads ALL notes for the year from pl_cell_notes table
     const { data: notesData } = useQuery({
         queryKey: ['pl-notes', year],
@@ -317,9 +511,10 @@ export default function PLMatrix() {
         cellNotes[getNoteKey(viewType, section, dept, item, monthIdx)] || null;
 
     // ── State Population ─────────────────────────────────────────────────────
+    // Clear cellValues when year or tab changes to prevent stale data
     useEffect(() => {
         setCellValues({});
-    }, [typeParam]);
+    }, [typeParam, year]);
 
     useEffect(() => {
         if (!matrixData?.sections) return;
@@ -346,7 +541,6 @@ export default function PLMatrix() {
         mutationFn: adminApi.savePLMatrixCell,
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['pl-matrix'] });
-            toast.success('Guardado');
         },
         onError: () => {
             toast.error('Error al guardar');
@@ -354,9 +548,11 @@ export default function PLMatrix() {
     });
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+    // Keep the original section key (personal, comisiones, etc.) instead of
+    // normalizing to 'expense' — this prevents key collisions between items
+    // with the same name in different categories (e.g., David in personal vs comisiones)
     const getCellKey = (section: string, dept: string, item: string, monthIdx: number) => {
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
-        return `${normalizedSection}-${dept}-${item}-${monthIdx}-${typeParam}`;
+        return `${section}-${dept}-${item}-${monthIdx}-${typeParam}`;
     };
 
     const getCellValue = (section: string, dept: string, item: string, monthIdx: number): CellData => {
@@ -371,8 +567,7 @@ export default function PLMatrix() {
         item: string,
         monthIdx: number
     ): number => {
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
-        const key = `${normalizedSection}-${dept}-${item}-${monthIdx}-${type}`;
+        const key = `${section}-${dept}-${item}-${monthIdx}-${type}`;
         return valuesMap[key]?.value || 0;
     };
 
@@ -409,13 +604,12 @@ export default function PLMatrix() {
     const handleSaveComment = (val: string, assignedTo: string[]) => {
         if (!editingComment) return;
         const { section, dept, item, monthIdx, saveType } = editingComment;
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
         setEditingComment(null);
         // Save to dedicated pl_cell_notes table
         noteSaveMutation.mutate({
             year,
             view_type: saveType,
-            section: normalizedSection,
+            section,
             dept,
             item,
             month: monthIdx + 1,
@@ -508,15 +702,15 @@ export default function PLMatrix() {
         return totals.map(t => fmt(t));
     };
 
-    // ── Values Calculation ───────────────────────────────────────────────────
-    const ingresosTotals = calculateSectionTotal('revenue', REVENUE_STRUCTURE);
+    // ── Values Calculation ─────────────────────────────────────────────────────
+    const ingresosTotals = calculateSectionTotal('revenue', mergedRevenueStructure);
     const ingresosAnual = ingresosTotals.reduce((a, b) => a + b, 0);
 
     // Calculate each expense category subtotal for Gastos de Explotación row
     const EXPENSE_KEYS_LIST = ['personal', 'comisiones', 'marketing', 'formacion', 'software', 'adspent', 'gastosOp'] as const;
     const expenseCategoryTotals: Record<string, number[]> = {};
     EXPENSE_KEYS_LIST.forEach(key => {
-        const items = EXPENSE_STRUCTURE[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
+        const items = mergedExpenseStructure[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
         expenseCategoryTotals[key] = calculateSectionTotal(key, items);
     });
 
@@ -533,7 +727,7 @@ export default function PLMatrix() {
     const calcAllExpenses = (valuesMap: Record<string, CellData>, type: 'real' | 'budget') => {
         const totals = Array(12).fill(0);
         ['personal', 'comisiones', 'marketing', 'formacion', 'software', 'adspent', 'gastosOp'].forEach(key => {
-            const items = EXPENSE_STRUCTURE[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
+            const items = mergedExpenseStructure[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
             items.forEach((group: any) => {
                 const its = group.items || group.services || [];
                 its.forEach((item: string) => {
@@ -546,8 +740,8 @@ export default function PLMatrix() {
         return totals.map(t => fmt(t));
     };
 
-    const realRevTotals = calcCompareSectionTotal(realValues, 'real', 'revenue', REVENUE_STRUCTURE);
-    const budgetRevTotals = calcCompareSectionTotal(budgetValues, 'budget', 'revenue', REVENUE_STRUCTURE);
+    const realRevTotals = calcCompareSectionTotal(realValues, 'real', 'revenue', mergedRevenueStructure);
+    const budgetRevTotals = calcCompareSectionTotal(budgetValues, 'budget', 'revenue', mergedRevenueStructure);
     const realExpTotals = calcAllExpenses(realValues, 'real');
     const budgetExpTotals = calcAllExpenses(budgetValues, 'budget');
     const realEbitda = realRevTotals.map((v, i) => fmt(v - realExpTotals[i]));
@@ -569,10 +763,14 @@ export default function PLMatrix() {
     const revBudgetAnnual = budgetRevTotals.reduce((a, b) => a + b, 0);
     const revDiffAnnual = fmt(revRealAnnual - revBudgetAnnual);
 
+    const calcExpenseSubCat = (valuesMap: Record<string, CellData>, type: 'real' | 'budget', key: string) => {
+        const items = mergedExpenseStructure[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
+        return calcCompareSectionTotal(valuesMap, type, key, items as StructureGroup[]);
+    };
+
     const expenseAlerts = EXPENSE_KEYS.map(key => {
-        const items = EXPENSE_STRUCTURE[`${key}Items` as keyof typeof EXPENSE_STRUCTURE];
-        const rT = calcCompareSectionTotal(realValues, 'real', key, items as StructureGroup[]);
-        const bT = calcCompareSectionTotal(budgetValues, 'budget', key, items as StructureGroup[]);
+        const rT = calcExpenseSubCat(realValues, 'real', key);
+        const bT = calcExpenseSubCat(budgetValues, 'budget', key);
         return {
             label: EXPENSE_LABELS[key],
             diffM: fmt((rT[alertMonthIdx] || 0) - (bT[alertMonthIdx] || 0)),
@@ -584,13 +782,19 @@ export default function PLMatrix() {
 
     const isLoadingComparison = loadingReal || loadingBudget;
 
+    const isPastYear = year < new Date().getFullYear();
+
     // ── Render Helpers ───────────────────────────────────────────────────────
     const renderEditableCell = (section: string, dept: string, item: string, monthIdx: number) => {
         const cell = getCellValue(section, dept, item, monthIdx);
-        const normalizedSection = section === 'revenue' ? 'revenue' : 'expense';
-        const note = getCellNote(typeParam as 'real' | 'budget', normalizedSection, dept, item, monthIdx);
+        // Notes are stored with normalized section ('revenue' or 'expense'), not the sub-section key
+        const normalizedNoteSection = section === 'revenue' ? 'revenue' : 'expense';
+        const note = getCellNote(typeParam as 'real' | 'budget', normalizedNoteSection, dept, item, monthIdx);
         const hasNote = !!note?.comment || (note?.assigned_to && note.assigned_to.length > 0);
         const cellKey = getCellKey(section, dept, item, monthIdx);
+        const saveSection = section === 'revenue' ? 'revenue' : 'expense';
+        const sectionKeyForSave = section === 'revenue' ? undefined : section;
+        const currentVal = cell.value;
 
         return (
             <td
@@ -601,14 +805,20 @@ export default function PLMatrix() {
                 onMouseLeave={handleMouseLeave}
             >
                 <input
-                    key={cellKey + '-' + cell.value}
+                    key={cellKey + '-' + currentVal}
                     type="text"
                     inputMode="decimal"
-                    defaultValue={cell.value || ''}
+                    defaultValue={currentVal || ''}
                     onFocus={(e) => {
                         e.target.select();
+                        e.target.dataset.dirty = '';
+                    }}
+                    onInput={(e) => {
+                        (e.target as HTMLInputElement).dataset.dirty = '1';
                     }}
                     onBlur={(e) => {
+                        // ONLY save if user actually typed/edited something
+                        if (e.target.dataset.dirty !== '1') return;
                         const raw = e.target.value.trim();
                         const numVal = Number(raw.replace(/\./g, '').replace(',', '.')) || 0;
                         handleCellChange(section, dept, item, monthIdx, String(numVal));
@@ -617,7 +827,8 @@ export default function PLMatrix() {
                             month: monthIdx + 1,
                             dept,
                             item,
-                            section: normalizedSection,
+                            section: saveSection,
+                            section_key: sectionKeyForSave,
                             value: numVal,
                             type: typeParam as 'budget' | 'real',
                         });
@@ -637,20 +848,48 @@ export default function PLMatrix() {
 
     const renderRevenueRows = () => {
         const rows: React.ReactNode[] = [];
-        REVENUE_STRUCTURE.forEach((group, groupIdx) => {
+        // For past years in real tab, revenue is editable (manual entry)
+        const isRevenueEditable = activeTab === 'Real' && isPastYear;
+        mergedRevenueStructure.forEach((group, groupIdx) => {
             group.services.forEach((service, serviceIdx) => {
                 rows.push(
                     <tr key={`rev-${groupIdx}-${serviceIdx}`} className="hover:bg-gray-50">
                         {serviceIdx === 0 ? (
                             <td
                                 rowSpan={group.services.length}
-                                className="border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 align-middle text-center"
+                                className="border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 align-middle text-center relative group/dept"
                             >
                                 {group.dept}
+                                <button
+                                    onClick={() => handleAddRow('revenue', group.dept, group.dept)}
+                                    className="absolute bottom-0 right-0 p-0.5 opacity-0 group-hover/dept:opacity-100 transition-opacity bg-purple-500 text-white rounded-tl hover:bg-purple-600"
+                                    title="Añadir fila"
+                                >
+                                    <Plus className="h-3 w-3" />
+                                </button>
                             </td>
                         ) : null}
-                        <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">{service}</td>
-                        {MONTHS_FULL.map((_, monthIdx) => renderEditableCell('revenue', group.dept, service, monthIdx))}
+                        <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">
+                            <div className="flex items-center justify-between group/item">
+                                <span>{service}</span>
+                                {findCustomRowId('revenue', group.dept, group.dept, service) && (
+                                    <span className="flex gap-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                                        <button onClick={() => handleRenameRow('revenue', group.dept, group.dept, service)} className="p-0.5 hover:text-blue-600" title="Renombrar"><Pencil className="h-3 w-3" /></button>
+                                        <button onClick={() => handleDeleteRow('revenue', group.dept, group.dept, service)} className="p-0.5 hover:text-red-600" title="Eliminar"><Trash2 className="h-3 w-3" /></button>
+                                    </span>
+                                )}
+                            </div>
+                        </td>
+                        {isRevenueEditable
+                            ? MONTHS_FULL.map((_, monthIdx) => renderEditableCell('revenue', group.dept, service, monthIdx))
+                            : MONTHS_FULL.map((_, monthIdx) => {
+                                const val = getCellValue('revenue', group.dept, service, monthIdx).value;
+                                return (
+                                    <td key={monthIdx} className="border border-gray-200 px-1 py-1 text-right text-xs">
+                                        {val ? fmtDisplay(val) : <span className="text-gray-300">0</span>}
+                                    </td>
+                                );
+                            })}
                         <td className="border border-gray-200 px-1 py-1 text-right text-xs font-medium bg-gray-50">
                             {fmtDisplay(calculateRowTotal('revenue', group.dept, service))}
                         </td>
@@ -689,12 +928,29 @@ export default function PLMatrix() {
                         {itemIdx === 0 ? (
                             <td
                                 rowSpan={group.items.length}
-                                className="border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 align-middle text-center"
+                                className="border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 bg-gray-50 align-middle text-center relative group/dept"
                             >
                                 {group.dept}
+                                <button
+                                    onClick={() => handleAddRow('expense', sectionKey, group.dept)}
+                                    className="absolute bottom-0 right-0 p-0.5 opacity-0 group-hover/dept:opacity-100 transition-opacity bg-orange-500 text-white rounded-tl hover:bg-orange-600"
+                                    title="Añadir fila"
+                                >
+                                    <Plus className="h-3 w-3" />
+                                </button>
                             </td>
                         ) : null}
-                        <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">{item}</td>
+                        <td className="border border-gray-200 px-2 py-1 text-xs text-gray-900">
+                            <div className="flex items-center justify-between group/item">
+                                <span>{item}</span>
+                                {findCustomRowId('expense', sectionKey, group.dept, item) && (
+                                    <span className="flex gap-0.5 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                                        <button onClick={() => handleRenameRow('expense', sectionKey, group.dept, item)} className="p-0.5 hover:text-blue-600" title="Renombrar"><Pencil className="h-3 w-3" /></button>
+                                        <button onClick={() => handleDeleteRow('expense', sectionKey, group.dept, item)} className="p-0.5 hover:text-red-600" title="Eliminar"><Trash2 className="h-3 w-3" /></button>
+                                    </span>
+                                )}
+                            </div>
+                        </td>
                         {MONTHS_FULL.map((_, monthIdx) => renderEditableCell(sectionKey, group.dept, item, monthIdx))}
                         <td className="border border-gray-200 px-1 py-1 text-right text-xs font-medium bg-gray-50">
                             {fmtDisplay(calculateRowTotal(sectionKey, group.dept, item))}
@@ -1031,7 +1287,7 @@ export default function PLMatrix() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {renderComparisonSection('INGRESOS DE EXPLOTACIÓN', 'revenue', REVENUE_STRUCTURE, 'bg-purple-100 text-purple-900', '')}
+                                        {renderComparisonSection('INGRESOS DE EXPLOTACIÓN', 'revenue', mergedRevenueStructure, 'bg-purple-100 text-purple-900', '')}
                                         {/* Gastos de Explotación summary row in Comparison */}
                                         {(() => {
                                             const realGastosTotals = calcAllExpenses(realValues, 'real');
@@ -1071,13 +1327,13 @@ export default function PLMatrix() {
                                                 </tr>
                                             );
                                         })()}
-                                        {renderComparisonSection('Gastos de personal', 'personal', EXPENSE_STRUCTURE.personalItems, 'bg-orange-100 text-orange-900', '')}
-                                        {renderComparisonSection('Comisiones', 'comisiones', EXPENSE_STRUCTURE.comisionesItems, 'bg-orange-50 text-orange-800', '')}
-                                        {renderComparisonSection('Marketing', 'marketing', EXPENSE_STRUCTURE.marketingItems, 'bg-orange-50 text-orange-800', '')}
-                                        {renderComparisonSection('Formación', 'formacion', EXPENSE_STRUCTURE.formacionItems, 'bg-orange-50 text-orange-800', '')}
-                                        {renderComparisonSection('Software', 'software', EXPENSE_STRUCTURE.softwareItems, 'bg-orange-50 text-orange-800', '')}
-                                        {renderComparisonSection('Adspent', 'adspent', EXPENSE_STRUCTURE.adspentItems, 'bg-orange-50 text-orange-800', '')}
-                                        {renderComparisonSection('Gastos Operativos', 'gastosOp', EXPENSE_STRUCTURE.gastosOpItems, 'bg-orange-50 text-orange-800', '')}
+                                        {renderComparisonSection('Gastos de personal', 'personal', mergedExpenseStructure.personalItems, 'bg-orange-100 text-orange-900', '')}
+                                        {renderComparisonSection('Comisiones', 'comisiones', mergedExpenseStructure.comisionesItems, 'bg-orange-50 text-orange-800', '')}
+                                        {renderComparisonSection('Marketing', 'marketing', mergedExpenseStructure.marketingItems, 'bg-orange-50 text-orange-800', '')}
+                                        {renderComparisonSection('Formación', 'formacion', mergedExpenseStructure.formacionItems, 'bg-orange-50 text-orange-800', '')}
+                                        {renderComparisonSection('Software', 'software', mergedExpenseStructure.softwareItems, 'bg-orange-50 text-orange-800', '')}
+                                        {renderComparisonSection('Adspent', 'adspent', mergedExpenseStructure.adspentItems, 'bg-orange-50 text-orange-800', '')}
+                                        {renderComparisonSection('Gastos Operativos', 'gastosOp', mergedExpenseStructure.gastosOpItems, 'bg-orange-50 text-orange-800', '')}
                                         <tr className="bg-blue-100">
                                             <td colSpan={2} className="border border-blue-300 px-2 py-2 font-bold text-blue-900 text-sm">EBITDA</td>
                                             {realEbitda.map((r, i) => {
@@ -1203,13 +1459,13 @@ export default function PLMatrix() {
                                 {gastosTotals.map((val, i) => <td key={i} className="border border-red-300 px-1 py-1.5 text-right font-semibold text-red-800">{fmtDisplay(val)}</td>)}
                                 <td className="border border-red-300 px-1 py-1.5 text-right font-bold text-red-900">{fmtDisplay(gastosAnual)}</td>
                             </tr>
-                            {renderExpenseCategory('Gastos de personal', EXPENSE_STRUCTURE.personalItems, 'personal', 'bg-orange-100 text-orange-900')}
-                            {renderExpenseCategory('Comisiones', EXPENSE_STRUCTURE.comisionesItems, 'comisiones')}
-                            {renderExpenseCategory('Marketing', EXPENSE_STRUCTURE.marketingItems, 'marketing')}
-                            {renderExpenseCategory('Formación', EXPENSE_STRUCTURE.formacionItems, 'formacion')}
-                            {renderExpenseCategory('Software', EXPENSE_STRUCTURE.softwareItems, 'software')}
-                            {renderExpenseCategory('Adspent', EXPENSE_STRUCTURE.adspentItems, 'adspent')}
-                            {renderExpenseCategory('Gastos Operativos', EXPENSE_STRUCTURE.gastosOpItems, 'gastosOp')}
+                            {renderExpenseCategory('Gastos de personal', mergedExpenseStructure.personalItems, 'personal', 'bg-orange-100 text-orange-900')}
+                            {renderExpenseCategory('Comisiones', mergedExpenseStructure.comisionesItems, 'comisiones')}
+                            {renderExpenseCategory('Marketing', mergedExpenseStructure.marketingItems, 'marketing')}
+                            {renderExpenseCategory('Formación', mergedExpenseStructure.formacionItems, 'formacion')}
+                            {renderExpenseCategory('Software', mergedExpenseStructure.softwareItems, 'software')}
+                            {renderExpenseCategory('Adspent', mergedExpenseStructure.adspentItems, 'adspent')}
+                            {renderExpenseCategory('Gastos Operativos', mergedExpenseStructure.gastosOpItems, 'gastosOp')}
                             <tr className="bg-blue-100 sticky bottom-0 z-10 shadow-sm">
                                 <td colSpan={2} className="border border-blue-300 px-2 py-2 font-bold text-blue-900 text-sm">EBITDA</td>
                                 {ebitdaTotals.map((val, i) => <td key={i} className={`border border-blue-300 px-1 py-2 text-right font-bold text-sm ${val >= 0 ? 'text-blue-900' : 'text-red-600'}`}>{fmtDisplay(val)}</td>)}

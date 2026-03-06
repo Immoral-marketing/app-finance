@@ -426,25 +426,8 @@ router.get('/matrix/:year', async (req, res) => {
             // REAL VIEW: Read from billing_details by SERVICE
             // ================================================
 
-            // 1. First fetch monthly_billing for the year
-            const { data: allMonthlyBillings } = await supabase
-                .from('monthly_billing')
-                .select('id, fiscal_month, fiscal_year, fee_paid, client_id, client:clients(id, name, is_active, vertical:verticals(id, name))')
-                .eq('fiscal_year', year);
-
-            // Filter to active clients
-            const monthlyBillings = allMonthlyBillings?.filter(mb => mb.client?.is_active === true) || [];
-            const mbIds = monthlyBillings.map(mb => mb.id);
-
-            // Fetch billing_details
-            let billingDetails = [];
-            if (mbIds.length > 0) {
-                const { data: details } = await supabase
-                    .from('billing_details')
-                    .select('id, monthly_billing_id, service_id, amount, service:services(code, name)')
-                    .in('monthly_billing_id', mbIds);
-                billingDetails = details || [];
-            }
+            const currentYear = new Date().getFullYear();
+            const isPastYear = parseInt(year) < currentYear;
 
             // Initialize revenue structure
             const revenueData = {
@@ -468,63 +451,103 @@ router.get('/matrix/:year', async (req, res) => {
                 'Otras comisiones': Array(12).fill(0),
                 'Budget Nutfruit': Array(12).fill(0),
                 'Captación': Array(12).fill(0),
+                'Setup inicial (ims)': Array(12).fill(0),
             };
 
-            const serviceMapping = {
-                'PAID_MEDIA_SETUP': 'Setup inicial',
-                'BRANDING': 'Branding',
-                'CONTENT_DESIGN': 'Diseño',
-                'AI_CONTENT': 'Contenido con IA',
-                'SOCIAL_MEDIA_MGMT': 'RRSS',
-                'DIGITAL_STRATEGY': 'Estrategia Digital',
-                'INFLUENCER_UGC': 'Influencers',
-                'IMMORALIA_SETUP': 'Setup inicial IA',
-                'AGENCY_AUTO': 'Automation',
-                'CONSULTING_AUTO': 'Consultoría',
-                'WEB_DEV': 'Web dev',
-                'SEO': 'SEO',
-                'MKT_AUTO_EMAIL': 'CRM',
-                'OTHER_HOURS': 'Otros servicios',
-            };
+            let revenueEditable = false;
 
-            const mbMap = {};
-            monthlyBillings?.forEach(mb => { mbMap[mb.id] = mb; });
+            if (isPastYear) {
+                // PAST YEARS: Read manual revenue from actual_revenue table
+                revenueEditable = true;
+                const { data: manualRevenue } = await supabase
+                    .from('actual_revenue')
+                    .select('*, service:services(name)')
+                    .eq('fiscal_year', year);
 
-            // Calculate Paid Media
-            let totalPaidMedia = Array(12).fill(0);
-            let imfilmsPaidMedia = Array(12).fill(0);
+                const deptMap = {};
+                departments?.forEach(d => deptMap[d.id] = d.name);
 
-            monthlyBillings.forEach(mb => {
-                const monthIdx = mb.fiscal_month - 1;
-                const feePaid = Number(mb.fee_paid || 0);
-                const verticalName = mb.client?.vertical?.name || '';
-
-                if (feePaid > 0) {
-                    totalPaidMedia[monthIdx] += feePaid;
-                    if (verticalName.toLowerCase() === 'imfilms') {
-                        imfilmsPaidMedia[monthIdx] += feePaid;
+                manualRevenue?.forEach(rev => {
+                    const serviceName = rev.service?.name || rev.description || 'Otros';
+                    const monthIdx = rev.fiscal_month - 1;
+                    const val = Number(rev.amount || 0);
+                    if (revenueData[serviceName] !== undefined) {
+                        revenueData[serviceName][monthIdx] += val;
                     }
+                });
+            } else {
+                // CURRENT/FUTURE YEARS: Read from billing_details (automatic)
+                const { data: allMonthlyBillings } = await supabase
+                    .from('monthly_billing')
+                    .select('id, fiscal_month, fiscal_year, fee_paid, client_id, client:clients(id, name, is_active, vertical:verticals(id, name))')
+                    .eq('fiscal_year', year);
+
+                const monthlyBillings = allMonthlyBillings?.filter(mb => mb.client?.is_active === true) || [];
+                const mbIds = monthlyBillings.map(mb => mb.id);
+
+                let billingDetails = [];
+                if (mbIds.length > 0) {
+                    const { data: details } = await supabase
+                        .from('billing_details')
+                        .select('id, monthly_billing_id, service_id, amount, service:services(code, name)')
+                        .in('monthly_billing_id', mbIds);
+                    billingDetails = details || [];
                 }
-            });
 
-            for (let i = 0; i < 12; i++) {
-                revenueData['Paid General'][i] = totalPaidMedia[i] - imfilmsPaidMedia[i];
-                revenueData['Paid imfilms'][i] = imfilmsPaidMedia[i];
+                const serviceMapping = {
+                    'PAID_MEDIA_SETUP': 'Setup inicial',
+                    'BRANDING': 'Branding',
+                    'CONTENT_DESIGN': 'Diseño',
+                    'AI_CONTENT': 'Contenido con IA',
+                    'SOCIAL_MEDIA_MGMT': 'RRSS',
+                    'DIGITAL_STRATEGY': 'Estrategia Digital',
+                    'INFLUENCER_UGC': 'Influencers',
+                    'IMMORALIA_SETUP': 'Setup inicial IA',
+                    'AGENCY_AUTO': 'Automation',
+                    'CONSULTING_AUTO': 'Consultoría',
+                    'WEB_DEV': 'Web dev',
+                    'SEO': 'SEO',
+                    'MKT_AUTO_EMAIL': 'CRM',
+                    'OTHER_HOURS': 'Otros servicios',
+                };
+
+                const mbMap = {};
+                monthlyBillings?.forEach(mb => { mbMap[mb.id] = mb; });
+
+                let totalPaidMedia = Array(12).fill(0);
+                let imfilmsPaidMedia = Array(12).fill(0);
+
+                monthlyBillings.forEach(mb => {
+                    const monthIdx = mb.fiscal_month - 1;
+                    const feePaid = Number(mb.fee_paid || 0);
+                    const verticalName = mb.client?.vertical?.name || '';
+
+                    if (feePaid > 0) {
+                        totalPaidMedia[monthIdx] += feePaid;
+                        if (verticalName.toLowerCase() === 'imfilms') {
+                            imfilmsPaidMedia[monthIdx] += feePaid;
+                        }
+                    }
+                });
+
+                for (let i = 0; i < 12; i++) {
+                    revenueData['Paid General'][i] = totalPaidMedia[i] - imfilmsPaidMedia[i];
+                    revenueData['Paid imfilms'][i] = imfilmsPaidMedia[i];
+                }
+
+                billingDetails?.forEach(detail => {
+                    if (!detail.service) return;
+                    const mb = mbMap[detail.monthly_billing_id];
+                    if (!mb) return;
+                    const serviceCode = detail.service.code;
+                    if (serviceCode === 'PAID_MEDIA_STRATEGY') return;
+
+                    const monthIdx = mb.fiscal_month - 1;
+                    const amount = Number(detail.amount || 0);
+                    const plRow = serviceMapping[serviceCode];
+                    if (plRow && revenueData[plRow]) revenueData[plRow][monthIdx] += amount;
+                });
             }
-
-            // Process billing_details
-            billingDetails?.forEach(detail => {
-                if (!detail.service) return;
-                const mb = mbMap[detail.monthly_billing_id];
-                if (!mb) return;
-                const serviceCode = detail.service.code;
-                if (serviceCode === 'PAID_MEDIA_STRATEGY') return;
-
-                const monthIdx = mb.fiscal_month - 1;
-                const amount = Number(detail.amount || 0);
-                const plRow = serviceMapping[serviceCode];
-                if (plRow && revenueData[plRow]) revenueData[plRow][monthIdx] += amount;
-            });
 
             const buildDeptRows = (dept, serviceNames) => {
                 return serviceNames.map(name => ({
@@ -532,7 +555,7 @@ router.get('/matrix/:year', async (req, res) => {
                     dept,
                     name,
                     values: revenueData[name] || Array(12).fill(0),
-                    editable: false
+                    editable: revenueEditable
                 }));
             };
 
@@ -544,6 +567,7 @@ router.get('/matrix/:year', async (req, res) => {
                 ...buildDeptRows('Imseo', ['SEO', 'Comisiones']),
                 ...buildDeptRows('Immoral', ['Otros servicios', 'Otras comisiones']),
                 ...buildDeptRows('Imcontent', ['Budget Nutfruit']),
+                ...buildDeptRows('Imsales', ['Setup inicial (ims)']),
                 ...buildDeptRows('Imsales', ['Captación']),
             ];
 
@@ -579,22 +603,32 @@ router.get('/matrix/:year', async (req, res) => {
                 { dept: 'Imcontent', cat: 'Influencers' }
             ];
             adspentItems.forEach(item => {
-                const k = `${item.dept}::${item.cat}`;
-                expensesKeyed[k] = { dept: item.dept, name: item.cat, values: Array(12).fill(0), metadata: {} };
+                const k = `${item.dept}::${item.cat}::`;
+                expensesKeyed[k] = { dept: item.dept, name: item.cat, section_key: '', values: Array(12).fill(0), metadata: {} };
             });
 
-            const deptMap = {};
-            departments?.forEach(d => deptMap[d.id] = d.name);
+            const deptMapExp = {};
+            departments?.forEach(d => deptMapExp[d.id] = d.name);
+
+            // Only these values are valid section keys (matching frontend EXPENSE_STRUCTURE)
+            const VALID_SECTION_KEYS = new Set([
+                'personal', 'comisiones', 'marketing', 'formacion',
+                'software', 'gastosOp', 'adspent'
+            ]);
 
             expenseData?.forEach(exp => {
                 const catName = exp.category?.name || 'Otros';
-                const deptName = deptMap[exp.department_id] || 'Otros';
+                const deptName = deptMapExp[exp.department_id] || 'Otros';
                 const monthIdx = exp.fiscal_month - 1;
                 const val = Number(exp.amount || 0);
-                const key = `${deptName}::${catName}`;
+                // Only use description as section_key if it's a valid known section key
+                // Legacy records with 'Manual entry from P&L Matrix' get empty section_key
+                const rawDesc = exp.description || '';
+                const sectionKey = VALID_SECTION_KEYS.has(rawDesc) ? rawDesc : '';
+                const key = `${deptName}::${catName}::${sectionKey}`;
 
                 if (!expensesKeyed[key]) {
-                    expensesKeyed[key] = { dept: deptName, name: catName, values: Array(12).fill(0), metadata: {} };
+                    expensesKeyed[key] = { dept: deptName, name: catName, section_key: sectionKey, values: Array(12).fill(0), metadata: {} };
                 }
                 expensesKeyed[key].values[monthIdx] += val;
 
@@ -612,6 +646,7 @@ router.get('/matrix/:year', async (req, res) => {
                     type: 'item',
                     dept: data.dept,
                     name: data.name,
+                    section_key: data.section_key,
                     values: data.values,
                     metadata: data.metadata,
                     editable: true
@@ -671,13 +706,13 @@ router.get('/matrix/:year', async (req, res) => {
  * Save cell edit (Budget or Real)
  */
 router.post('/matrix/save', async (req, res) => {
-    const { year, month, dept, item, value, type, section, comment, assigned_to } = req.body;
+    const { year, month, dept, item, value, type, section, section_key, comment, assigned_to } = req.body;
     const MONTH_KEYS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
     const monthKey = MONTH_KEYS[month - 1];
 
     try {
         console.log('--- SAVE REQUEST RECEIVED ---');
-        console.log('Payload:', { year, month, dept, item, value, type, section, comment, assigned_to });
+        console.log('Payload:', { year, month, dept, item, value, type, section, section_key, comment, assigned_to });
 
         // 1. Resolve Department ID
         const { data: deptData, error: deptError } = await supabase
@@ -707,7 +742,18 @@ router.post('/matrix/save', async (req, res) => {
             if (catData) {
                 categoryId = catData.id;
             } else {
-                console.warn(`Category not found: ${item}`);
+                // Auto-create expense category if not found
+                const code = item.substring(0, 8).toUpperCase().replace(/[^A-Z0-9]/g, '') + '_' + Date.now().toString(36).slice(-6);
+                const { data: newCat, error: catErr } = await supabase.from('expense_categories')
+                    .insert({ name: item, code: code, is_general: false })
+                    .select('id')
+                    .single();
+                if (catErr) {
+                    console.error('Error creating expense category:', catErr);
+                    throw new Error(`Could not create category for: ${item}`);
+                }
+                categoryId = newCat.id;
+                console.log(`Auto-created expense category: ${item} (${categoryId})`);
             }
         }
 
@@ -772,19 +818,65 @@ router.post('/matrix/save', async (req, res) => {
         } else {
             // REAL SAVE
             if (section === 'revenue') {
-                return res.status(400).json({ error: 'Real revenue is read-only (comes from billing)' });
+                // Allow saving real revenue for past years (manual entry)
+                const currentYear = new Date().getFullYear();
+                if (parseInt(year) >= currentYear) {
+                    return res.status(400).json({ error: 'Real revenue is read-only for current/future years (comes from billing)' });
+                }
+
+                // Save to actual_revenue table for past years
+                if (!serviceId) {
+                    // Try to find service without department filter
+                    const { data: svcAny } = await supabase.from('services').select('id').eq('name', item).maybeSingle();
+                    if (svcAny) serviceId = svcAny.id;
+                }
+
+                const { data: existingRev } = await supabase
+                    .from('actual_revenue')
+                    .select('id')
+                    .eq('fiscal_year', year)
+                    .eq('fiscal_month', month)
+                    .eq('department_id', departmentId)
+                    .eq('description', item)
+                    .maybeSingle();
+
+                if (existingRev) {
+                    await supabase.from('actual_revenue')
+                        .update({ amount: Number(value) })
+                        .eq('id', existingRev.id);
+                } else {
+                    await supabase.from('actual_revenue').insert({
+                        fiscal_year: parseInt(year),
+                        fiscal_month: parseInt(month),
+                        department_id: departmentId,
+                        service_id: serviceId,
+                        amount: Number(value),
+                        description: item,
+                        reference_type: 'manual'
+                    });
+                }
+
+                return res.json({ success: true });
             }
 
             if (!categoryId) throw new Error(`Category not found for expense item: ${item}`);
 
-            const { data: existingExp } = await supabase
+            // Query for existing expense record
+            let expQuery = supabase
                 .from('actual_expenses')
                 .select('id, cell_metadata')
                 .eq('fiscal_year', year)
                 .eq('fiscal_month', month)
                 .eq('department_id', departmentId)
-                .eq('expense_category_id', categoryId)
-                .maybeSingle();
+                .eq('expense_category_id', categoryId);
+
+            // If section_key provided, filter by it to differentiate same-name items
+            if (section_key) {
+                expQuery = expQuery.eq('description', section_key);
+            }
+
+            const { data: existingExpList } = await expQuery;
+            const existingExp = existingExpList?.[0];
 
             const metaUpdate = existingExp?.cell_metadata || {};
             if (comment !== undefined) metaUpdate.comment = comment;
@@ -802,7 +894,7 @@ router.post('/matrix/save', async (req, res) => {
                     department_id: departmentId,
                     expense_category_id: categoryId,
                     amount: Number(value),
-                    description: 'Manual entry from P&L Matrix',
+                    description: section_key || 'Manual entry from P&L Matrix',
                     cell_metadata: metaUpdate
                 });
             }
@@ -812,6 +904,144 @@ router.post('/matrix/save', async (req, res) => {
     } catch (error) {
         console.error('Error saving P&L cell:', error);
         res.status(500).json({ error: 'Failed to save cell: ' + error.message });
+    }
+});
+/**
+ * GET /pl/custom-rows
+ * Fetch all custom rows
+ */
+router.get('/custom-rows', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('pl_custom_rows')
+            .select('*')
+            .order('created_at', { ascending: true });
+
+        if (error) throw error;
+        res.json({ rows: data || [] });
+    } catch (error) {
+        console.error('Error fetching custom rows:', error);
+        res.status(500).json({ error: 'Failed to fetch custom rows' });
+    }
+});
+
+/**
+ * POST /pl/custom-rows
+ * Add a new custom row + auto-create expense_category or service in DB
+ */
+router.post('/custom-rows', async (req, res) => {
+    const { block_type, section_key, dept, item_name } = req.body;
+
+    try {
+        if (!block_type || !section_key || !dept || !item_name) {
+            return res.status(400).json({ error: 'Missing required fields: block_type, section_key, dept, item_name' });
+        }
+
+        // 1. Insert into pl_custom_rows
+        const { data: customRow, error: insertErr } = await supabase
+            .from('pl_custom_rows')
+            .insert({ block_type, section_key, dept, item_name })
+            .select()
+            .single();
+
+        if (insertErr) {
+            if (insertErr.code === '23505') { // unique violation
+                return res.status(409).json({ error: 'Esta fila ya existe en este bloque' });
+            }
+            throw insertErr;
+        }
+
+        // 2. Auto-create the expense_category or service entry (if needed)
+        const { data: deptData } = await supabase
+            .from('departments')
+            .select('id')
+            .eq('name', dept)
+            .maybeSingle();
+
+        if (block_type === 'expense') {
+            // Check if expense_category exists
+            const { data: existingCat } = await supabase
+                .from('expense_categories')
+                .select('id')
+                .eq('name', item_name)
+                .maybeSingle();
+
+            if (!existingCat) {
+                // Create a new expense_category with a unique code
+                const code = item_name.substring(0, 8).toUpperCase().replace(/[^A-Z0-9]/g, '') + '_' + Date.now().toString(36).slice(-6);
+                await supabase.from('expense_categories').insert({
+                    name: item_name,
+                    code: code,
+                    is_general: false
+                });
+            }
+        } else if (block_type === 'revenue' && deptData) {
+            // Check if service exists for this dept
+            const { data: existingSvc } = await supabase
+                .from('services')
+                .select('id')
+                .eq('name', item_name)
+                .eq('department_id', deptData.id)
+                .maybeSingle();
+
+            if (!existingSvc) {
+                const code = item_name.substring(0, 8).toUpperCase().replace(/[^A-Z0-9]/g, '') + '_' + Date.now().toString(36).slice(-6);
+                await supabase.from('services').insert({
+                    department_id: deptData.id,
+                    name: item_name,
+                    code: code,
+                    service_type: 'revenue'
+                });
+            }
+        }
+
+        res.json({ success: true, row: customRow });
+    } catch (error) {
+        console.error('Error adding custom row:', error);
+        res.status(500).json({ error: 'Failed to add custom row: ' + error.message });
+    }
+});
+
+/**
+ * DELETE /pl/custom-rows/:id
+ * Remove a custom row
+ */
+router.delete('/custom-rows/:id', async (req, res) => {
+    try {
+        const { error } = await supabase
+            .from('pl_custom_rows')
+            .delete()
+            .eq('id', req.params.id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error deleting custom row:', error);
+        res.status(500).json({ error: 'Failed to delete custom row' });
+    }
+});
+
+/**
+ * PATCH /pl/custom-rows/:id
+ * Rename a custom row
+ */
+router.patch('/custom-rows/:id', async (req, res) => {
+    const { item_name } = req.body;
+    try {
+        if (!item_name || !item_name.trim()) {
+            return res.status(400).json({ error: 'item_name is required' });
+        }
+
+        const { error } = await supabase
+            .from('pl_custom_rows')
+            .update({ item_name: item_name.trim() })
+            .eq('id', req.params.id);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error renaming custom row:', error);
+        res.status(500).json({ error: 'Failed to rename custom row' });
     }
 });
 

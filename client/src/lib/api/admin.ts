@@ -207,6 +207,7 @@ export const adminApi = {
         dept: string;
         item: string;
         section: string;
+        section_key?: string;
         value: number;
         type: 'budget' | 'real';
         comment?: string;
@@ -315,5 +316,28 @@ export const adminApi = {
 
     deleteUser: (id: string) => {
         return fetchApi(`/users/${id}`, { method: 'DELETE' });
+    },
+
+    // P&L Custom Rows
+    getCustomRows: () => {
+        return fetchApi<{ rows: { id: string; block_type: string; section_key: string; dept: string; item_name: string }[] }>('/pl/custom-rows');
+    },
+
+    addCustomRow: (data: { block_type: 'revenue' | 'expense'; section_key: string; dept: string; item_name: string }) => {
+        return fetchApi<{ success: boolean; row: any }>('/pl/custom-rows', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        });
+    },
+
+    deleteCustomRow: (id: string) => {
+        return fetchApi(`/pl/custom-rows/${id}`, { method: 'DELETE' });
+    },
+
+    renameCustomRow: (id: string, item_name: string) => {
+        return fetchApi(`/pl/custom-rows/${id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ item_name })
+        });
     },
 };
